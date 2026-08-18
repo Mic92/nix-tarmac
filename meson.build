@@ -26,9 +26,16 @@ ssl = dependency('openssl')
 lz4 = dependency('liblz4')
 
 core_deps = [lmdb, blake3, archive, ssl, lz4]
+fuzzing = get_option('fuzzer').enabled()
+# instrument core too, otherwise libFuzzer only sees edges in the harness
+san_args = fuzzing ? ['-fsanitize=fuzzer-no-link,address,undefined'] : []
+san_link_args = fuzzing ? ['-fsanitize=address,undefined'] : []
+
 core = static_library('core', 'src/pack_cas.cpp', 'src/tree.cpp',
+  cpp_args: san_args,
   dependencies: core_deps)
 core_dep = declare_dependency(link_with: core, include_directories: 'src',
+  compile_args: san_args, link_args: san_link_args,
   dependencies: core_deps)
 
 executable('bench', 'bench/bench.cpp', dependencies: core_dep)
@@ -38,11 +45,9 @@ foreach t : ['model_test', 'corrupt_test', 'nar_test', 'crash_test', 'gc_test']
     timeout: 300)
 endforeach
 
-if get_option('fuzzer').enabled()
-  fuzz_args = ['-fsanitize=fuzzer']
+if fuzzing
   executable('fuzz_ingest', 'fuzz/fuzz_ingest.cc',
-    cpp_args: fuzz_args,
-    link_args: fuzz_args,
+    link_args: ['-fsanitize=fuzzer'],
     dependencies: core_dep)
 endif
 
