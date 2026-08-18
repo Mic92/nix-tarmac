@@ -39,8 +39,15 @@ int main(int argc, char **argv) {
     close(fd);
     auto cas = PackCas::open(dir);
     std::string out;
-    for (auto &h : hashes)
-      (void) cas->get(h, out); // wrong content is fine, crashing is not
+    size_t rejected = 0;
+    for (auto &h : hashes) {
+      try {
+        (void) cas->get(h, out);
+      } catch (const CorruptError &) {
+        rejected++;
+      }
+    }
+    printf("bit flips: %zu rejected\n", rejected);
   }
 
   // truncate the pack: out-of-bounds entries must throw, not SIGBUS

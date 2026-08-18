@@ -15,7 +15,8 @@ struct CorruptError : std::runtime_error {
 
 // LMDB index (BLAKE3 -> offset/length) plus an append-only packfile read
 // through a shared mmap: lock-free reads from any process, writes batch
-// under an flock. compact() rewrites the pack as a new generation;
+// under an flock. Blobs are LZ4-compressed when that shrinks them; hashes
+// are over the raw content. compact() rewrites the pack as a new generation;
 // readers remap, old mappings stay mapped until close.
 class PackCas {
 public:
@@ -27,8 +28,10 @@ public:
 
   [[nodiscard]] std::string put(std::string_view data);
   [[nodiscard]] bool get(std::string_view hash, std::string &out);
-  // zero-copy; view valid until close
-  [[nodiscard]] bool get_view(std::string_view hash, std::string_view &out);
+  // out points into the mmap (raw blobs) or into scratch (compressed)
+  [[nodiscard]] bool get_view(std::string_view hash, std::string &scratch,
+                              std::string_view &out);
+  [[nodiscard]] bool size(std::string_view hash, uint64_t &out);
   [[nodiscard]] bool has(std::string_view hash);
   void sync();
 

@@ -3,6 +3,7 @@
 #include <blake3.h>
 #include <fcntl.h>
 #include <lmdb.h>
+#include <lz4.h>
 #include <sys/file.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -34,6 +35,9 @@ constexpr size_t kIndexMapSize = 32UL << 30;
 constexpr uint64_t kAutoSyncBytes = 256UL << 20;
 constexpr size_t kHashLen = 32;
 constexpr int kLockTimeoutSec = 600;
+constexpr size_t kMinCompressSize = 64;
+// mismatch wipes the cache; bump when IndexEntry or the pack encoding changes
+constexpr std::string_view kFormat = "2";
 
 [[noreturn]] void sys_err(const std::string &what) {
   throw std::system_error(errno, std::generic_category(), what);
@@ -47,8 +51,33 @@ void mdb_check(int rc, const char *what) {
 struct IndexEntry {
   uint64_t off;
   uint64_t len;
+  uint64_t raw_len; // == len means stored raw
+
+  bool compressed() const { return raw_len != len; }
 };
-static_assert(sizeof(IndexEntry) == 16);
+static_assert(sizeof(IndexEntry) == 24);
+
+IndexEntry decode_entry(const MDB_val &v) {
+  if (v.mv_size != sizeof(IndexEntry))
+    throw CorruptError("corrupt index entry");
+  IndexEntry e;
+  memcpy(&e, v.mv_data, sizeof(e));
+  if (e.off + e.len < e.off)
+    throw CorruptError("pack index out of bounds");
+  return e;
+}
+
+void decompress(std::string_view stored, uint64_t raw_len, std::string &out) {
+  if (raw_len > static_cast<uint64_t>(LZ4_MAX_INPUT_SIZE) ||
+      stored.size() > static_cast<size_t>(INT32_MAX))
+    throw CorruptError("corrupt index entry: blob too large");
+  out.resize(raw_len);
+  int n = LZ4_decompress_safe(stored.data(), out.data(),
+                              static_cast<int>(stored.size()),
+                              static_cast<int>(raw_len));
+  if (n < 0 || static_cast<uint64_t>(n) != raw_len)
+    throw CorruptError("corrupt compressed blob");
+}
 
 // aborts the txn unless it is the caller-owned write txn
 class ReadTxn {
@@ -141,6 +170,8 @@ struct PackCas::Impl {
   uint64_t committed_end = 0; // pack size covered by committed index
   uint64_t end = 0;           // pack size including current batch
   uint64_t batch_bytes = 0;
+
+  std::string compress_buf;
 
   ~Impl() {
     if (wtxn)
@@ -284,8 +315,7 @@ struct PackCas::Impl {
     flock(lock_fd, LOCK_UN);
   }
 
-  bool lookup(std::string_view hash, uint64_t &off, uint64_t &len,
-              uint64_t *gen_out) {
+  bool lookup(std::string_view hash, IndexEntry &e, uint64_t *gen_out) {
     if (hash.size() != kHashLen)
       throw std::invalid_argument("bad hash length");
     ReadTxn txn(env, wtxn);
@@ -296,13 +326,54 @@ struct PackCas::Impl {
     if (rc == MDB_NOTFOUND)
       return false;
     mdb_check(rc, "mdb_get");
-    if (v.mv_size != sizeof(IndexEntry))
-      throw CorruptError("corrupt index entry");
-    IndexEntry e;
-    memcpy(&e, v.mv_data, sizeof(e));
-    off = e.off;
-    len = e.len;
+    e = decode_entry(v);
     return true;
+  }
+
+  // retry: a compaction can retire the generation between index and map
+  bool stored_view(std::string_view hash, IndexEntry &e,
+                   std::string_view &out) {
+    for (int attempt = 0; attempt < 8; attempt++) {
+      uint64_t gen;
+      if (!lookup(hash, e, &gen))
+        return false;
+      auto m = mapping_for(gen, wtxn != nullptr);
+      if (!m)
+        continue;
+      if (e.off + e.len > kMapSize)
+        throw CorruptError("pack index out of bounds");
+      uint64_t known = m->size;
+      if (e.off + e.len > known) {
+        struct stat st;
+        if (fstat(m->fd, &st) < 0)
+          sys_err("fstat pack");
+        m->size = known = static_cast<uint64_t>(st.st_size);
+        if (e.off + e.len > known)
+          throw CorruptError("pack index out of bounds");
+      }
+      out = {m->base + e.off, e.len};
+      return true;
+    }
+    throw std::runtime_error("pack generation churn");
+  }
+
+  void check_format(MDB_txn *txn) {
+    MDB_val k = to_val("format"), v;
+    int rc = mdb_get(txn, meta, &k, &v);
+    if (rc == MDB_SUCCESS) {
+      if (std::string_view(static_cast<char *>(v.mv_data), v.mv_size) !=
+          kFormat)
+        throw CorruptError("unsupported cache format");
+      return;
+    }
+    if (rc != MDB_NOTFOUND)
+      mdb_check(rc, "mdb_get format");
+    MDB_stat st;
+    mdb_check(mdb_stat(txn, blobs, &st), "mdb_stat");
+    if (st.ms_entries != 0)
+      throw CorruptError("cache predates format versioning");
+    v = to_val(kFormat);
+    mdb_check(mdb_put(txn, meta, &k, &v, 0), "mdb_put format");
   }
 
   // only safe with the writer lock
@@ -356,7 +427,14 @@ std::unique_ptr<PackCas> PackCas::open_once(const std::string &dir) {
   mdb_check(mdb_txn_begin(impl->env, nullptr, 0, &txn), "txn_begin");
   mdb_check(mdb_dbi_open(txn, "blobs", MDB_CREATE, &impl->blobs), "dbi_open");
   mdb_check(mdb_dbi_open(txn, "meta", MDB_CREATE, &impl->meta), "dbi_open");
-  uint64_t gen = impl->read_gen(txn);
+  uint64_t gen;
+  try {
+    impl->check_format(txn);
+    gen = impl->read_gen(txn);
+  } catch (...) {
+    mdb_txn_abort(txn);
+    throw;
+  }
   mdb_check(mdb_txn_commit(txn), "txn_commit");
 
   std::string lock = dir + "/lock";
@@ -379,23 +457,35 @@ std::string PackCas::put(std::string_view data) {
   auto &i = *impl_;
   if (!i.wtxn)
     i.begin_batch();
-  uint64_t off, len;
-  if (i.lookup(hash, off, len, nullptr))
+  IndexEntry e;
+  if (i.lookup(hash, e, nullptr))
     return hash;
+  std::string_view stored = data;
+  std::string &cbuf = i.compress_buf;
+  if (data.size() >= kMinCompressSize &&
+      data.size() <= static_cast<size_t>(LZ4_MAX_INPUT_SIZE)) {
+    // capacity < input: LZ4 fails instead of producing a larger blob
+    cbuf.resize(data.size() - 1);
+    int n = LZ4_compress_default(data.data(), cbuf.data(),
+                                 static_cast<int>(data.size()),
+                                 static_cast<int>(cbuf.size()));
+    if (n > 0)
+      stored = {cbuf.data(), static_cast<size_t>(n)};
+  }
   auto m = i.current();
   size_t woff = 0;
-  while (woff < data.size()) {
-    ssize_t n = pwrite(m->fd, data.data() + woff, data.size() - woff,
+  while (woff < stored.size()) {
+    ssize_t n = pwrite(m->fd, stored.data() + woff, stored.size() - woff,
                        static_cast<off_t>(i.end + woff));
     if (n < 0)
       sys_err("pwrite pack");
     woff += static_cast<size_t>(n);
   }
-  IndexEntry e{i.end, data.size()};
+  e = {i.end, stored.size(), data.size()};
   MDB_val k = to_val(hash), v{sizeof(e), &e};
   mdb_check(mdb_put(i.wtxn, i.blobs, &k, &v, MDB_NOOVERWRITE), "mdb_put");
-  i.end += data.size();
-  i.batch_bytes += data.size();
+  i.end += stored.size();
+  i.batch_bytes += stored.size();
   if (i.batch_bytes >= kAutoSyncBytes)
     sync();
   return hash;
@@ -405,60 +495,59 @@ std::string PackCas::put(std::string_view data) {
 bool PackCas::get(std::string_view hash, std::string &out) {
   auto &i = *impl_;
   for (int attempt = 0; attempt < 8; attempt++) {
-    uint64_t off, len, gen;
-    if (!i.lookup(hash, off, len, &gen))
+    IndexEntry e;
+    uint64_t gen;
+    if (!i.lookup(hash, e, &gen))
       return false;
     auto m = i.mapping_for(gen, i.wtxn != nullptr);
     if (!m)
       continue;
-    if (off + len < off)
-      throw CorruptError("pack index out of bounds");
-    out.resize(len);
+    std::string stored;
+    std::string &dst = e.compressed() ? stored : out;
+    dst.resize(e.len);
     size_t got = 0;
-    while (got < len) {
-      ssize_t n = pread(m->fd, out.data() + got, len - got,
-                        static_cast<off_t>(off + got));
+    while (got < e.len) {
+      ssize_t n = pread(m->fd, dst.data() + got, e.len - got,
+                        static_cast<off_t>(e.off + got));
       if (n < 0)
         sys_err("pread pack");
       if (n == 0)
         throw CorruptError("pack truncated");
       got += static_cast<size_t>(n);
     }
+    if (e.compressed())
+      decompress(dst, e.raw_len, out);
     return true;
   }
   throw std::runtime_error("pack generation churn");
 }
 
-bool PackCas::get_view(std::string_view hash, std::string_view &out) {
-  auto &i = *impl_;
-  // retry: a compaction can retire the generation between index and map
-  for (int attempt = 0; attempt < 8; attempt++) {
-    uint64_t off, len, gen;
-    if (!i.lookup(hash, off, len, &gen))
-      return false;
-    auto m = i.mapping_for(gen, i.wtxn != nullptr);
-    if (!m)
-      continue;
-    if (off + len < off || off + len > kMapSize)
-      throw CorruptError("pack index out of bounds");
-    uint64_t known = m->size;
-    if (off + len > known) {
-      struct stat st;
-      if (fstat(m->fd, &st) < 0)
-        sys_err("fstat pack");
-      m->size = known = static_cast<uint64_t>(st.st_size);
-      if (off + len > known)
-        throw CorruptError("pack index out of bounds");
-    }
-    out = {m->base + off, len};
+bool PackCas::get_view(std::string_view hash, std::string &scratch,
+                       std::string_view &out) {
+  IndexEntry e;
+  std::string_view stored;
+  if (!impl_->stored_view(hash, e, stored))
+    return false;
+  if (!e.compressed()) {
+    out = stored;
     return true;
   }
-  throw std::runtime_error("pack generation churn");
+  decompress(stored, e.raw_len, scratch);
+  out = scratch;
+  return true;
+}
+
+bool PackCas::size(std::string_view hash, uint64_t &out) {
+  IndexEntry e;
+  if (!impl_->lookup(hash, e, nullptr))
+    return false;
+  out = e.raw_len;
+  return true;
 }
 
 bool PackCas::has(std::string_view hash) {
-  uint64_t off, len;
-  return impl_->lookup(hash, off, len, nullptr);
+  IndexEntry e;
+  return impl_->lookup(hash, e, nullptr);
 }
 
 void PackCas::sync() {
@@ -504,17 +593,14 @@ void PackCas::compact(const std::function<bool(std::string_view)> &live) {
     MDB_val k, v;
     int rc;
     while ((rc = mdb_cursor_get(c, &k, &v, MDB_NEXT)) == MDB_SUCCESS) {
-      if (v.mv_size != sizeof(IndexEntry))
-        throw CorruptError("corrupt index entry");
-      IndexEntry e;
-      memcpy(&e, v.mv_data, sizeof(e));
+      IndexEntry e = decode_entry(v);
       std::string_view hash{static_cast<char *>(k.mv_data), k.mv_size};
       if (!live(hash))
         continue;
-      if (e.off + e.len < e.off || e.off + e.len > psize)
+      if (e.off + e.len > psize)
         throw CorruptError("pack index out of bounds");
       buf.append(m->base + e.off, e.len);
-      keep.emplace_back(std::string(hash), IndexEntry{noff, e.len});
+      keep.emplace_back(std::string(hash), IndexEntry{noff, e.len, e.raw_len});
       noff += e.len;
       if (buf.size() >= (4 << 20)) {
         write_all(nfd, buf);

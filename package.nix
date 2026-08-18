@@ -8,6 +8,7 @@
   libblake3,
   libarchive,
   openssl,
+  lz4,
   # must be ABI-compatible with the nix that dlopen()s the plugin
   nix-fetchers ? null,
   nix-store ? null,
@@ -42,6 +43,7 @@ stdenv.mkDerivation {
     libblake3
     libarchive
     openssl
+    lz4
   ]
   ++ lib.optionals plugin [
     nix-fetchers

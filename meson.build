@@ -23,8 +23,9 @@ lmdb = dependency('lmdb')
 blake3 = dependency('libblake3')
 archive = dependency('libarchive')
 ssl = dependency('openssl')
+lz4 = dependency('liblz4')
 
-core_deps = [lmdb, blake3, archive, ssl]
+core_deps = [lmdb, blake3, archive, ssl, lz4]
 core = static_library('core', 'src/pack_cas.cpp', 'src/tree.cpp',
   dependencies: core_deps)
 core_dep = declare_dependency(link_with: core, include_directories: 'src',

@@ -35,8 +35,9 @@ void walk(TreeStore &s, TreeWalker &w, const std::string &root,
     if (e.type == 'd')
       walk(s, w, root, e.id, child, depth + 1);
     else {
+      std::string scratch;
       std::string_view v;
-      if (!s.readBlobView(e.id, v))
+      if (!s.readBlobView(e.id, scratch, v))
         abort(); // ingested tree references a missing blob
     }
   }

@@ -37,8 +37,12 @@ public:
   std::string putTree(const std::vector<TreeEntry> &entries);
   std::vector<TreeEntry> readTree(const std::string &id);
   std::string readBlob(const std::string &id);
-  bool readBlobView(const std::string &id, std::string_view &out) {
-    return cas_->get_view(id, out);
+  bool readBlobView(const std::string &id, std::string &scratch,
+                    std::string_view &out) {
+    return cas_->get_view(id, scratch, out);
+  }
+  bool blobSize(const std::string &id, uint64_t &out) {
+    return cas_->size(id, out);
   }
   bool hasTree(const std::string &id);
   void sync() { cas_->sync(); }

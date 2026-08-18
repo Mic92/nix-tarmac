@@ -66,11 +66,12 @@ int main(int argc, char **argv) {
     size_t n = std::min<size_t>(20000, paths.size());
     TreeEntry e;
     uint64_t bytes = 0;
+    std::string scratch;
     std::string_view v;
     double t0 = now();
     for (size_t i = 0; i < n; i++)
       if (walker.lookup(root, paths[rng() % paths.size()], e) &&
-          e.type != 'd' && store.readBlobView(e.id, v))
+          e.type != 'd' && store.readBlobView(e.id, scratch, v))
         bytes += v.size();
     double dt = now() - t0;
     printf("readFile   %8zu reads in %6.2fs (%.0f reads/s, %.1f MB/s)\n", n,

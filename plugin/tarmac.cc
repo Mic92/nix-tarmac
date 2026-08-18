@@ -102,8 +102,9 @@ struct PackAccessor : SourceAccessor {
     auto e = find(path);
     if (!e || e->type == 'd' || e->type == 's')
       throw Error("path '%s' is not a regular file", path);
+    std::string scratch;
     std::string_view v;
-    if (!healing([&] { return store.readBlobView(e->id, v); }))
+    if (!healing([&] { return store.readBlobView(e->id, scratch, v); }))
       throw Error("missing blob for '%s'", path);
     sizeCallback(v.size());
     sink(v);
@@ -126,9 +127,9 @@ struct PackAccessor : SourceAccessor {
     default:
       st.type = tRegular;
       st.isExecutable = e->type == 'x';
-      std::string_view v;
-      if (store.readBlobView(e->id, v))
-        st.fileSize = v.size();
+      uint64_t size;
+      if (store.blobSize(e->id, size))
+        st.fileSize = size;
     }
     return st;
   }

@@ -35,8 +35,9 @@ int main(int argc, char **argv) {
   auto random_blob = [&] {
     size_t len = rng() % 3 ? rng() % 512 : rng() % 100000;
     std::string b(len, '\0');
+    bool text = rng() % 2;
     for (size_t i = 0; i < len; i += 8) {
-      uint64_t r = rng();
+      uint64_t r = text ? rng() % 4 : rng();
       memcpy(b.data() + i, &r, std::min<size_t>(8, len - i));
     }
     return b;
@@ -64,9 +65,12 @@ int main(int argc, char **argv) {
       std::string out;
       assert(cas->get(*k, out));
       assert(out == model[*k]);
+      std::string scratch;
       std::string_view v;
-      assert(cas->get_view(*k, v));
+      assert(cas->get_view(*k, scratch, v));
       assert(v == model[*k]);
+      uint64_t n;
+      assert(cas->size(*k, n) && n == model[*k].size());
       break;
     }
     case 6: { // miss

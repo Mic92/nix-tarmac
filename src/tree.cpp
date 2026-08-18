@@ -452,9 +452,10 @@ void nar_node(TreeStore &store, const TreeEntry &e,
               size_t depth) {
   if (depth > kMaxTreeDepth)
     throw std::runtime_error("tree too deep");
+  std::string scratch;
   auto blob = [&](const std::string &id) -> std::string_view {
     std::string_view v;
-    if (!store.readBlobView(id, v))
+    if (!store.readBlobView(id, scratch, v))
       throw CorruptError("missing blob");
     return v;
   };
