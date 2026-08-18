@@ -12,21 +12,34 @@ an [LMDB](https://en.wikipedia.org/wiki/Lightning_Memory-Mapped_Database)-indexe
 append-only packfile, BLAKE3 hashes, and mmap-based reads.
 Results are byte-identical (same `narHash`), so lock files keep working.
 
-Fetching a nixpkgs tarball (48 MB, ~53k files) with Nix 2.35:
+Fetching a nixpkgs tarball (51 MB, ~53k files) with Nix 2.35 on a
+ZFS-backed server, average of 3 runs (`bench/e2e_bench.sh`):
 
 | | builtin | nix-tarmac |
 |---|---|---|
-| first fetch (unpack + hash) | 8.3 s | 1.5 s |
-| every eval after that | 69 ms | 26 ms |
-| `firefox.drvPath` eval, warm | 3.2 s | 2.8 s |
-| re-import into /nix/store | 4.9 s | 4.1 s |
+| first fetch (unpack + hash) | 10.4 s | 2.4 s |
+| `firefox.drvPath` eval, warm | 3.3 s | 2.4 s |
+| re-import into /nix/store | 10.3 s | 8.8 s |
 
 The tarball comes from a local file, so the first-fetch row excludes
 network time. With a real download the unpack and hash work overlaps
-the transfer. The warm eval overhead is paid on every evaluation of
-every tarball input.
+the transfer.
 Files shared between revisions are stored once: two nixpkgs
 revisions 200 commits apart take 93 MB instead of 453 MB.
+
+Over the network it also matters which compression the tarball uses.
+nixpkgs channels are published as both xz- and zstd-compressed
+tarballs (`nixexprs.tar.zst`); zstd decompresses fast enough to fully
+overlap with the download, but the builtin fetcher's per-file import
+cost hides most of that. Fetching nixpkgs-unstable from
+channels.nixos.org (server in a datacenter, warm content cache, fresh
+download each run, average of 3 runs, `bench/network_bench.sh`):
+
+| | builtin | nix-tarmac |
+|---|---|---|
+| `channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst` | 3.1 s | 2.0 s |
+| `channels.nixos.org/nixpkgs-unstable/nixexprs.tar.xz` | 3.6 s | 2.9 s |
+| `github.com/NixOS/nixpkgs/archive/nixpkgs-unstable.tar.gz` | 3.9 s | 3.1 s |
 
 ## Installation
 
