@@ -5,6 +5,7 @@
 #include <archive_entry.h>
 
 #include <cassert>
+#include <chrono>
 #include <cstdio>
 #include <unistd.h>
 #include <string>
@@ -57,8 +58,9 @@ int main(int argc, char **argv) {
   if (system(cmd.c_str()) != 0)
     return 1;
 
-  constexpr uint64_t kTtl = 200'000'000;
-  TreeStore store(PackCas::open(dir), kTtl, 0, 0);
+  constexpr auto kTtl = std::chrono::milliseconds(200);
+  constexpr auto kNoDelay = std::chrono::nanoseconds(0);
+  TreeStore store(PackCas::open(dir), kTtl, kNoDelay, kNoDelay);
 
   auto first = ingest(store, 0);
   uint64_t size0;
@@ -97,7 +99,7 @@ int main(int argc, char **argv) {
 
   store.sync();
   {
-    TreeStore reopened(PackCas::open(dir), kTtl, 0, 0);
+    TreeStore reopened(PackCas::open(dir), kTtl, kNoDelay, kNoDelay);
     assert(reopened.hasTree(first.root));
     uint64_t size2;
     assert(nar_sha256(reopened, first.root, size2) == nar0);

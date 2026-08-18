@@ -1,18 +1,23 @@
-#pragma once
+#ifndef NIX_TARMAC_TREE_HPP
+#define NIX_TARMAC_TREE_HPP
 
 #include "pack_cas.hpp"
 
+#include <chrono>
+#include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 struct archive;
 
-std::string to_hex(std::string_view raw);
-std::string from_hex(std::string_view hex);
+auto to_hex(std::string_view raw) -> std::string;
+auto from_hex(std::string_view hex) -> std::string;
 
 // 'r' regular, 'x' executable, 's' symlink (id = target blob), 'd' directory
 struct TreeEntry {
@@ -23,30 +28,34 @@ struct TreeEntry {
 
 class TreeStore {
 public:
+  using Duration = std::chrono::nanoseconds;
+  static constexpr Duration kDefaultTtl = std::chrono::days(30);
+  static constexpr Duration kDefaultGcInterval = std::chrono::days(1);
+  static constexpr Duration kDefaultTouchInterval = std::chrono::hours(1);
+
   // roots unused for ttl are evicted; the GC pass runs at most once per
   // gc_interval, triggered by ingest or an explicit maybeGc()
-  explicit TreeStore(std::unique_ptr<PackCas> cas,
-                     uint64_t ttl_ns = kDay * 30, uint64_t gc_interval_ns = kDay,
-                     uint64_t touch_interval_ns = kDay / 24)
-      : cas_(std::move(cas)), ttl_ns_(ttl_ns), gc_interval_ns_(gc_interval_ns),
-        touch_interval_ns_(touch_interval_ns) {}
+  explicit TreeStore(std::unique_ptr<PackCas> cas, Duration ttl = kDefaultTtl,
+                     Duration gc_interval = kDefaultGcInterval,
+                     Duration touch_interval = kDefaultTouchInterval)
+      : cas_(std::move(cas)), ttl_ns_(ttl.count()),
+        gc_interval_ns_(gc_interval.count()),
+        touch_interval_ns_(touch_interval.count()) {}
 
-  static constexpr uint64_t kDay = 86'400'000'000'000;
-
-  std::string putBlob(std::string_view data) { return cas_->put(data); }
-  std::string putTree(const std::vector<TreeEntry> &entries);
-  std::vector<TreeEntry> readTree(const std::string &id);
-  std::string readBlob(const std::string &id);
-  bool readBlobView(const std::string &id, std::string &scratch,
-                    std::string_view &out) {
-    return cas_->get_view(id, scratch, out);
+  auto putBlob(std::string_view data) -> std::string { return cas_->put(data); }
+  auto putTree(const std::vector<TreeEntry> &entries) -> std::string;
+  auto readTree(const std::string &tree_id) -> std::vector<TreeEntry>;
+  auto readBlob(const std::string &blob_id) -> std::string;
+  auto readBlobView(const std::string &blob_id, std::string &scratch,
+                    std::string_view &out) -> bool {
+    return cas_->get_view(blob_id, scratch, out);
   }
-  bool blobSize(const std::string &id, uint64_t &out) {
-    return cas_->size(id, out);
+  auto blobSize(const std::string &blob_id, uint64_t &out) -> bool {
+    return cas_->size(blob_id, out);
   }
-  bool hasTree(const std::string &id);
+  auto hasTree(const std::string &tree_id) -> bool;
   void sync() { cas_->sync(); }
-  PackCas &cas() { return *cas_; }
+  auto cas() -> PackCas & { return *cas_; }
 
   void registerRoot(const std::string &root);
   void touchRoot(const std::string &root);
@@ -56,10 +65,10 @@ public:
     std::string root;
     uint64_t last_access;
   };
-  std::vector<RootInfo> roots_info();
+  auto roots_info() -> std::vector<RootInfo>;
 
 private:
-  void mark_live(const std::string &id,
+  void mark_live(const std::string &root,
                  std::unordered_set<std::string> &live);
 
   std::unique_ptr<PackCas> cas_;
@@ -74,20 +83,28 @@ struct IngestResult {
 };
 
 // consumes and frees the archive; caller opened it (file, memory, stream)
-IngestResult ingest_archive(TreeStore &store, struct archive *a);
-IngestResult ingest_tarball_file(TreeStore &store, const std::string &path);
+auto ingest_archive(TreeStore &store, struct archive *arc) -> IngestResult;
+auto ingest_tarball_file(TreeStore &store, const std::string &path)
+    -> IngestResult;
 
-struct TreeWalker {
-  TreeStore &store;
-  std::unordered_map<std::string, std::vector<TreeEntry>> cache{};
+class TreeWalker {
+public:
+  explicit TreeWalker(TreeStore &store) : store_(&store) {}
 
-  const std::vector<TreeEntry> &tree(const std::string &id);
-  bool lookup(const std::string &root, std::string_view path, TreeEntry &out);
+  auto tree(const std::string &tree_id) -> const std::vector<TreeEntry> &;
+  auto lookup(const std::string &root, std::string_view path, TreeEntry &out)
+      -> bool;
+
+private:
+  TreeStore *store_;
+  std::unordered_map<std::string, std::vector<TreeEntry>> cache_;
 };
 
 void nar_dump(TreeStore &store, const std::string &root,
               const std::function<void(std::string_view)> &sink);
 
 // returns raw 32-byte sha256 of the NAR
-std::string nar_sha256(TreeStore &store, const std::string &root,
-                       uint64_t &nar_size);
+auto nar_sha256(TreeStore &store, const std::string &root, uint64_t &nar_size)
+    -> std::string;
+
+#endif

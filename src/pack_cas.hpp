@@ -1,4 +1,5 @@
-#pragma once
+#ifndef NIX_TARMAC_PACK_CAS_HPP
+#define NIX_TARMAC_PACK_CAS_HPP
 
 #include <cstdint>
 #include <functional>
@@ -7,7 +8,7 @@
 #include <string>
 #include <string_view>
 
-std::string blake3_hash(std::string_view data);
+auto blake3_hash(std::string_view data) -> std::string;
 
 struct CorruptError : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -20,35 +21,39 @@ struct CorruptError : std::runtime_error {
 // readers remap, old mappings stay mapped until close.
 class PackCas {
 public:
-  static std::unique_ptr<PackCas> open(const std::string &dir);
+  static auto open(const std::string &dir) -> std::unique_ptr<PackCas>;
   ~PackCas();
 
   PackCas(const PackCas &) = delete;
-  PackCas &operator=(const PackCas &) = delete;
+  PackCas(PackCas &&) = delete;
+  auto operator=(const PackCas &) -> PackCas & = delete;
+  auto operator=(PackCas &&) -> PackCas & = delete;
 
-  [[nodiscard]] std::string put(std::string_view data);
-  [[nodiscard]] bool get(std::string_view hash, std::string &out);
+  [[nodiscard]] auto put(std::string_view data) -> std::string;
+  [[nodiscard]] auto get(std::string_view hash, std::string &out) -> bool;
   // out points into the mmap (raw blobs) or into scratch (compressed)
-  [[nodiscard]] bool get_view(std::string_view hash, std::string &scratch,
-                              std::string_view &out);
-  [[nodiscard]] bool size(std::string_view hash, uint64_t &out);
-  [[nodiscard]] bool has(std::string_view hash);
+  [[nodiscard]] auto get_view(std::string_view hash, std::string &scratch,
+                              std::string_view &out) -> bool;
+  [[nodiscard]] auto size(std::string_view hash, uint64_t &out) -> bool;
+  [[nodiscard]] auto has(std::string_view hash) -> bool;
   void sync();
 
-  uint64_t pack_size();
+  auto pack_size() -> uint64_t;
   void compact(const std::function<bool(std::string_view)> &live);
 
   // separate dbi; writes join an open batch
   void meta_put(std::string_view key, std::string_view val);
-  [[nodiscard]] bool meta_get(std::string_view key, std::string &out);
+  [[nodiscard]] auto meta_get(std::string_view key, std::string &out) -> bool;
   void meta_del(std::string_view key);
-  void meta_scan(std::string_view prefix,
-                 const std::function<bool(std::string_view, std::string_view)>
-                     &cb);
+  void meta_scan(
+      std::string_view prefix,
+      const std::function<bool(std::string_view, std::string_view)> &callback);
 
 private:
-  static std::unique_ptr<PackCas> open_once(const std::string &dir);
+  static auto open_once(const std::string &dir) -> std::unique_ptr<PackCas>;
   struct Impl;
   explicit PackCas(std::unique_ptr<Impl> impl);
   std::unique_ptr<Impl> impl_;
 };
+
+#endif
