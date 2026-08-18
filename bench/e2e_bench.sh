@@ -14,7 +14,9 @@ outexpr="(builtins.fetchTree { type = \"tarball\"; url = \"file://$tarball\"; })
 fxexpr="(import (builtins.fetchTree { type = \"tarball\"; url = \"file://$tarball\"; }).outPath { config = { }; overlays = [ ]; }).firefox.drvPath"
 
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+# store contents are chmod 555, so plain rm -rf fails on directories
+rm_store() { chmod -R u+w "$work/store" 2>/dev/null || true; rm -rf "$work/store"; }
+trap 'rm_store; rm -rf "$work"' EXIT
 
 run_eval() { # args: cache-dir plugin-args...
   local cache=$1
@@ -30,7 +32,7 @@ bench() { # args: label cache-dir reset(cache|store|-) extra-args...
   local total=0 t0
   for ((i = 0; i < runs; i++)); do
     [[ $reset == cache ]] && rm -rf "$cache"
-    [[ $reset == store ]] && rm -rf "$work/store"
+    [[ $reset == store ]] && rm_store
     t0=$(date +%s%N)
     run_eval "$cache" "$@"
     total=$((total + ($(date +%s%N) - t0) / 1000000))
@@ -38,7 +40,7 @@ bench() { # args: label cache-dir reset(cache|store|-) extra-args...
   printf '%-28s %6d ms\n' "$label" "$((total / runs))"
 }
 
-echo "== tarball: $tarball ($(du -h "$tarball" | cut -f1)), nix $version, $runs runs =="
+echo "== tarball: $tarball ($(du -h --apparent-size "$tarball" | cut -f1)), nix $version, $runs runs =="
 
 bench "cold ingest builtin" "$work/b" cache --plugin-files "" --expr "$expr"
 bench "cold ingest plugin" "$work/p" cache --plugin-files "$plugin" --expr "$expr"
