@@ -1,0 +1,6 @@
+build*/
+crash-*
+oom-*
+*.profraw
+fuzz/corpus/*
+!fuzz/corpus/seed*
