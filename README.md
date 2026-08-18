@@ -38,8 +38,8 @@ from a datacenter server, fresh download each run, average of 3 runs
 
 | | builtin | nix-tarmac |
 |---|---|---|
-| `tar.zst`, first fetch | 10.2 s | **2.4 s** |
-| `tar.zst`, re-fetch | 1.6 s | 1.3 s |
+| `tar.zst`, first fetch | 10.2 s | 2.4 s |
+| `tar.zst`, re-fetch | 1.6 s | **1.3 s** |
 | `tar.xz`, first fetch | 10.6 s | 3.0 s |
 | `tar.xz`, re-fetch | 2.3 s | 2.3 s |
 
