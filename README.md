@@ -24,10 +24,9 @@ ZFS-backed server, average of 3 runs (`bench/e2e_bench.sh`):
 The tarball comes from a local file, so the first-fetch row excludes
 network time. With a real download the unpack and hash work overlaps
 the transfer.
-Files shared between revisions are stored once: one nixpkgs revision
-takes 102 MiB, a second one 200 commits later adds 5 MiB
-(`bench/size_bench.sh`). Git's zlib packs hold the same two revisions in 69 MiB;
-LZ4 trades that for decompression at memory speed.
+Files shared between revisions are stored once.
+One nixpkgs revision takes 102 MiB, a second one 200 commits later adds 5 MiB (`bench/size_bench.sh`).
+Git needs 69 MiB for the same two revisions because zlib compresses better than LZ4.
 
 Over the network it also matters which compression the tarball uses.
 nixpkgs channels are published as both xz- and zstd-compressed
