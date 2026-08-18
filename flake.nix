@@ -26,8 +26,14 @@
         {
           options.nix-tarmac.package = lib.mkOption {
             type = lib.types.package;
-            default = (pkgs.callPackage ./packages.nix { }).plugin-dispatcher;
-            description = "Plugin build to load. Override to build against a custom Nix.";
+            default =
+              if config.nix.package ? libs.nix-fetchers then
+                pkgs.callPackage ./package.nix {
+                  inherit (config.nix.package.libs) nix-fetchers nix-store nix-util;
+                }
+              else
+                (pkgs.callPackage ./packages.nix { }).plugin-dispatcher;
+            defaultText = "plugin built against config.nix.package";
           };
           config.nix.settings.plugin-files = [
             "${config.nix-tarmac.package}/lib/nix/plugins/nix-tarmac-loader.${suffix}"
