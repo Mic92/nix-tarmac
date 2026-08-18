@@ -3,7 +3,7 @@
 Nix plugin that speeds up fetching of tarball flake inputs.
 
 Nix unpacks every tarball input (nixpkgs, flake-utils, anything pinned to a `.tar.gz` URL) into a bare Git repository (`~/.cache/nix/tarball-cache-v2`).
-Each file is SHA-1 hashed and zlib-compressed, each fetch adds a packfile.
+Each file is SHA-1 hashed and zlib-compressed.
 For nixpkgs that's 50k+ files per revision.
 The cache is never garbage collected or repacked.
 
