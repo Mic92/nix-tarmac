@@ -7,6 +7,7 @@
 #include "nix/fetchers/cache.hh"
 #include "nix/fetchers/fetch-settings.hh"
 #include "nix/fetchers/fetchers.hh"
+#include "nix/fetchers/fetch-to-store.hh"
 #include "nix/store/filetransfer.hh"
 #include "nix/store/store-api.hh"
 #include "nix/util/serialise.hh"
@@ -318,6 +319,12 @@ struct FastTarballInputScheme : InputScheme {
         info.insert_or_assign(
             "narHash", Hash::parseAny(to_hex(narHash), HashAlgorithm::SHA256)
                            .to_string(HashFormat::SRI, true));
+        // otherwise mountInput re-dumps the tree to recompute the narHash
+        settings.getCache()->upsert(
+            makeSourcePathToHashCacheKey("tarmac:" + to_hex(ingest.root),
+                                         ContentAddressMethod::Raw::NixArchive,
+                                         CanonPath::root),
+            {{"hash", getStrAttr(info, "narHash")}});
       }
       settings.getCache()->upsert(key, info);
     }
