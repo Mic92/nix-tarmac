@@ -2,14 +2,14 @@
 
 Nix plugin that speeds up fetching of tarball flake inputs.
 
-Nix unpacks every tarball input (nixpkgs, flake-utils, anything pinned to a `.tar.gz` URL) into its Git cache.
-Git uses one zlib-compressed object per file, SHA-1 hashed and written one at a time.
+Nix unpacks every tarball input (nixpkgs, flake-utils, anything pinned to a `.tar.gz` URL) into a bare Git repository (`~/.cache/nix/tarball-cache-v2`).
+Each file is SHA-1 hashed and zlib-compressed, each fetch adds a packfile.
 For nixpkgs that's 50k+ files per revision.
-The cache is never garbage collected.
+The cache is never garbage collected or repacked.
 
 nix-tarmac replaces the builtin tarball fetcher with
 an [LMDB](https://en.wikipedia.org/wiki/Lightning_Memory-Mapped_Database)-indexed
-append-only packfile, BLAKE3 hashes, and mmap-based reads.
+append-only packfile of LZ4-compressed blobs, BLAKE3 hashes, and mmap-based reads.
 Results are byte-identical (same `narHash`), so lock files keep working.
 
 Fetching a nixpkgs tarball (51 MB, ~53k files) with Nix 2.35 on a
@@ -24,8 +24,10 @@ ZFS-backed server, average of 3 runs (`bench/e2e_bench.sh`):
 The tarball comes from a local file, so the first-fetch row excludes
 network time. With a real download the unpack and hash work overlaps
 the transfer.
-Files shared between revisions are stored once: two nixpkgs
-revisions 200 commits apart take 93 MB instead of 453 MB.
+Files shared between revisions are stored once: one nixpkgs revision
+takes 102 MiB, a second one 200 commits later adds 5 MiB
+(`bench/size_bench.sh`). Git's zlib packs hold the same two revisions in 69 MiB;
+LZ4 trades that for decompression at memory speed.
 
 Over the network it also matters which compression the tarball uses.
 nixpkgs channels are published as both xz- and zstd-compressed
