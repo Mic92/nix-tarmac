@@ -36,17 +36,22 @@ lib.makeScope newScope (
     );
 
     # The loader dlopen()s the build matching the running Nix version.
-    plugin-dispatcher = symlinkJoin {
-      name = "nix-tarmac-dispatcher";
-      paths = [
-        self.default
-      ]
-      ++ map (version: self.versionPlugins."plugin-${version}") (supportedNixVersions ++ [ "git" ]);
-      # dladdr() resolves symlinks, so the loader must be a real file here
-      postBuild = ''
-        rm -f "$out"/lib/nix/plugins/nix-tarmac-loader.*
-        cp -L ${self.default}/lib/nix/plugins/nix-tarmac-loader.* "$out"/lib/nix/plugins/
-      '';
-    };
+    # extraPlugins come first so exact-match builds win over nixpkgs ones.
+    mkDispatcher =
+      extraPlugins:
+      symlinkJoin {
+        name = "nix-tarmac-dispatcher";
+        paths =
+          extraPlugins
+          ++ [ self.default ]
+          ++ map (version: self.versionPlugins."plugin-${version}") (supportedNixVersions ++ [ "git" ]);
+        # dladdr() resolves symlinks, so the loader must be a real file here
+        postBuild = ''
+          rm -f "$out"/lib/nix/plugins/nix-tarmac-loader.*
+          cp -L ${self.default}/lib/nix/plugins/nix-tarmac-loader.* "$out"/lib/nix/plugins/
+        '';
+      };
+
+    plugin-dispatcher = self.mkDispatcher [ ];
   }
 )
