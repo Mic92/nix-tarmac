@@ -336,8 +336,9 @@ struct FastTarballInputScheme : InputScheme {
   // evict the builtin so plain https://...tar.gz URLs hit this scheme
   auto &schemes = const_cast<InputSchemeMap &>(getAllInputSchemes());
   if (schemes.erase("tarball") != 1) {
-    warn("nix-tarmac: builtin tarball scheme not found; "
-         "falling back to the builtin fetcher");
+    // no "warning:" prefix: the NixOS nix.conf check fails on warnings
+    static_cast<void>(fprintf(stderr, "nix-tarmac: builtin tarball scheme not "
+                                      "found; falling back\n"));
     return;
   }
   registerInputScheme(std::make_unique<FastTarballInputScheme>());

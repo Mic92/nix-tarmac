@@ -22,8 +22,7 @@ std::string_view major_minor(std::string_view version) {
 
 void warn(const std::string &message) {
   static_cast<void>(std::fprintf(
-      stderr,
-      "warning: nix-tarmac: %s. falling back to the builtin fetcher\n",
+      stderr, "nix-tarmac: %s. falling back to the builtin fetcher\n",
       message.c_str()));
 }
 

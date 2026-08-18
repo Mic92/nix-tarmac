@@ -24,7 +24,6 @@ lib.makeScope newScope (
       inherit (nixVersions.latest.libs) nix-fetchers nix-store nix-util;
     };
 
-    # "git" is only a compile check for the next release
     versionPlugins = lib.listToAttrs (
       map (
         version:
@@ -42,7 +41,7 @@ lib.makeScope newScope (
       paths = [
         self.default
       ]
-      ++ map (version: self.versionPlugins."plugin-${version}") supportedNixVersions;
+      ++ map (version: self.versionPlugins."plugin-${version}") (supportedNixVersions ++ [ "git" ]);
       # dladdr() resolves symlinks, so the loader must be a real file here
       postBuild = ''
         rm -f "$out"/lib/nix/plugins/nix-tarmac-loader.*
