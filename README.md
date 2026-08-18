@@ -37,7 +37,7 @@ download each run, average of 3 runs, `bench/network_bench.sh`):
 
 | | builtin | nix-tarmac |
 |---|---|---|
-| `channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst` | 3.1 s | 2.0 s |
+| `channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst` | 3.1 s | **2.0 s** |
 | `channels.nixos.org/nixpkgs-unstable/nixexprs.tar.xz` | 3.6 s | 2.9 s |
 | `github.com/NixOS/nixpkgs/archive/nixpkgs-unstable.tar.gz` | 3.9 s | 3.1 s |
 
