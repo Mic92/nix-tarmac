@@ -13,6 +13,26 @@
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       scopeFor = system: nixpkgs.legacyPackages.${system}.callPackage ./packages.nix { };
+      tarmacModule =
+        {
+          pkgs,
+          lib,
+          config,
+          ...
+        }:
+        let
+          suffix = if pkgs.stdenv.hostPlatform.isDarwin then "dylib" else "so";
+        in
+        {
+          options.nix-tarmac.package = lib.mkOption {
+            type = lib.types.package;
+            default = (pkgs.callPackage ./packages.nix { }).plugin-dispatcher;
+            description = "Plugin build to load. Override to build against a custom Nix.";
+          };
+          config.nix.settings.plugin-files = [
+            "${config.nix-tarmac.package}/lib/nix/plugins/nix-tarmac-loader.${suffix}"
+          ];
+        };
     in
     {
       packages = forAllSystems (
@@ -26,25 +46,8 @@
         // scope.versionPlugins
       );
 
-      darwinModules.default =
-        { pkgs, ... }:
-        {
-          nix.settings.plugin-files = [
-            "${
-              self.packages.${pkgs.stdenv.hostPlatform.system}.plugin-dispatcher
-            }/lib/nix/plugins/nix-tarmac-loader.dylib"
-          ];
-        };
-
-      nixosModules.default =
-        { pkgs, ... }:
-        {
-          nix.settings.plugin-files = [
-            "${
-              self.packages.${pkgs.stdenv.hostPlatform.system}.plugin-dispatcher
-            }/lib/nix/plugins/nix-tarmac-loader.so"
-          ];
-        };
+      nixosModules.default = tarmacModule;
+      darwinModules.default = tarmacModule;
 
       checks = forAllSystems (
         system:
