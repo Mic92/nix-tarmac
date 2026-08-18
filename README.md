@@ -29,17 +29,22 @@ revisions 200 commits apart take 93 MB instead of 453 MB.
 
 Over the network it also matters which compression the tarball uses.
 nixpkgs channels are published as both xz- and zstd-compressed
-tarballs (`nixexprs.tar.zst`); zstd decompresses fast enough to fully
-overlap with the download, but the builtin fetcher's per-file import
-cost hides most of that. Fetching nixpkgs-unstable from
-channels.nixos.org (server in a datacenter, warm content cache, fresh
-download each run, average of 3 runs, `bench/network_bench.sh`):
+tarballs. zstd decompresses fast enough to fully overlap with the
+download, but the builtin fetcher's per-file import cost hides most of
+that. Fetching `channels.nixos.org/nixpkgs-unstable/nixexprs.tar.*`
+from a datacenter server, fresh download each run, average of 3 runs
+(`bench/network_bench.sh`). "First fetch" starts with a cold cache.
+"Re-fetch" hits the content cache and only re-downloads:
 
 | | builtin | nix-tarmac |
 |---|---|---|
-| `channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst` | 3.1 s | **2.0 s** |
-| `channels.nixos.org/nixpkgs-unstable/nixexprs.tar.xz` | 3.6 s | 2.9 s |
-| `github.com/NixOS/nixpkgs/archive/nixpkgs-unstable.tar.gz` | 3.9 s | 3.1 s |
+| `tar.zst`, first fetch | 10.2 s | **2.4 s** |
+| `tar.zst`, re-fetch | 1.6 s | 1.3 s |
+| `tar.xz`, first fetch | 10.6 s | 3.0 s |
+| `tar.xz`, re-fetch | 2.3 s | 2.3 s |
+
+With the plugin a cold fetch costs barely more than a re-fetch: ingest
+and a single hash pass overlap the download.
 
 ## Installation
 

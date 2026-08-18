@@ -27,25 +27,27 @@ fetch() { # args: cache-dir url plugin-args...
     >/dev/null
 }
 
-bench() { # args: label cache-dir base-url extra-args...
+bench() { # args: label cache(cold = fresh per run) base-url extra-args...
   local label=$1 cache=$2 base=$3
   shift 3
-  # prime the content cache so runs measure download + lookup,
-  # not the one-time cold import
-  fetch "$cache" "$base?bust=prime$RANDOM" "$@"
-  local total=0 t0
+  [[ $cache != cold ]] && fetch "$cache" "$base?bust=prime$RANDOM" "$@"
+  local total=0 t0 c
   for ((i = 0; i < runs; i++)); do
+    c=$cache
+    [[ $cache == cold ]] && c=$(mktemp -d -p "$work")
     t0=$(date +%s%N)
-    fetch "$cache" "$base?bust=$RANDOM$RANDOM" "$@"
+    fetch "$c" "$base?bust=$RANDOM$RANDOM" "$@"
     total=$((total + ($(date +%s%N) - t0) / 1000000))
   done
   printf '%-28s %6d ms\n' "$label" "$((total / runs))"
 }
 
-echo "== channel: $channel, nix $version, $runs runs (warm cache, fresh download) =="
+echo "== channel: $channel, nix $version, $runs runs, fresh download =="
 
 for ext in zst xz; do
   url="https://channels.nixos.org/$channel/nixexprs.tar.$ext"
-  bench "builtin tar.$ext" "$work/b" "$url" --plugin-files ""
-  bench "plugin  tar.$ext" "$work/p" "$url" --plugin-files "$plugin"
+  bench "cold builtin tar.$ext" cold "$url" --plugin-files ""
+  bench "cold plugin  tar.$ext" cold "$url" --plugin-files "$plugin"
+  bench "warm builtin tar.$ext" "$work/b" "$url" --plugin-files ""
+  bench "warm plugin  tar.$ext" "$work/p" "$url" --plugin-files "$plugin"
 done
