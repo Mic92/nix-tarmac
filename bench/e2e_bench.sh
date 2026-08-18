@@ -14,11 +14,12 @@ outexpr="(builtins.fetchTree { type = \"tarball\"; url = \"file://$tarball\"; })
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+store="local?root=$work/store"
 
 run_eval() { # args: cache-dir plugin-args...
   local cache=$1
   shift
-  XDG_CACHE_HOME=$cache "$nixbin" eval \
+  XDG_CACHE_HOME=$cache "$nixbin" eval --store "$store" \
     --extra-experimental-features 'nix-command flakes' \
     --impure --raw "$@" >/dev/null
 }
@@ -52,9 +53,6 @@ fxexpr="(import (builtins.fetchTree { type = \"tarball\"; url = \"file://$tarbal
 bench "firefox eval builtin" "$work/b" 0 --expr "$fxexpr"
 bench "firefox eval plugin" "$work/p" 0 --plugin-files "$plugin" --expr "$fxexpr"
 
-path=$(XDG_CACHE_HOME=$work/b "$nixbin" eval \
-  --extra-experimental-features 'nix-command flakes' \
-  --impure --raw --expr "$outexpr")
 for who in builtin plugin; do
   args=()
   cache=$work/b
@@ -63,12 +61,13 @@ for who in builtin plugin; do
     cache=$work/p
   }
   total=0
+  path=
   for ((i = 0; i < runs; i++)); do
-    "$nixbin" store delete "$path" >/dev/null 2>&1 || true
+    [[ -n $path ]] && "$nixbin" store delete --store "$store" "$path" >/dev/null 2>&1
     t0=$(date +%s%N)
-    XDG_CACHE_HOME=$cache "$nixbin" eval \
+    path=$(XDG_CACHE_HOME=$cache "$nixbin" eval --store "$store" \
       --extra-experimental-features 'nix-command flakes' \
-      --impure --raw "${args[@]}" --expr "$outexpr" >/dev/null
+      --impure --raw "${args[@]}" --expr "$outexpr")
     t1=$(date +%s%N)
     total=$((total + (t1 - t0) / 1000000))
   done
