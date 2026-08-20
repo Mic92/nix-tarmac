@@ -1,4 +1,6 @@
 // golden test: NAR hash must match `nix hash path` for a known tree
+#include "test_tmp.hpp"
+
 #include "tree.hpp"
 
 #include <archive.h>
@@ -34,10 +36,7 @@ void add_entry(archive *a, const char *path, mode_t type, mode_t perm,
 } // namespace
 
 int main(int argc, char **argv) {
-  std::string dir = argc > 1 ? argv[1] : "/tmp/packcas-nar-test";
-  std::string cmd = "rm -rf " + dir;
-  if (system(cmd.c_str()) != 0)
-    return 1;
+  std::string dir = argc > 1 ? argv[1] : make_test_dir("packcas-nar-test");
 
   std::string tar;
   {

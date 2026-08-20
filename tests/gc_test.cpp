@@ -1,4 +1,6 @@
 // TTL eviction over roots plus mark-and-sweep compaction
+#include "test_tmp.hpp"
+
 #include "tree.hpp"
 
 #include <archive.h>
@@ -53,10 +55,7 @@ IngestResult ingest(TreeStore &store, unsigned id) {
 } // namespace
 
 int main(int argc, char **argv) {
-  std::string dir = argc > 1 ? argv[1] : "/tmp/packcas-gc-test";
-  std::string cmd = "rm -rf " + dir;
-  if (system(cmd.c_str()) != 0)
-    return 1;
+  std::string dir = argc > 1 ? argv[1] : make_test_dir("packcas-gc-test");
 
   constexpr auto kTtl = std::chrono::milliseconds(200);
   constexpr auto kNoDelay = std::chrono::nanoseconds(0);
