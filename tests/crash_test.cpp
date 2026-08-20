@@ -16,6 +16,14 @@
 
 namespace {
 
+int data_sync(int fd) {
+#ifdef __APPLE__
+  return fcntl(fd, F_BARRIERFSYNC);
+#else
+  return fdatasync(fd);
+#endif
+}
+
 std::string blob_for(unsigned child, unsigned i) {
   std::string b = "child-" + std::to_string(child) + "-" + std::to_string(i);
   b.resize(100 + (i * 37) % 5000, static_cast<char>('a' + child));
@@ -73,7 +81,7 @@ void killer(const std::string &dir, const std::string &log, uint64_t seed) {
         for (auto &h : batch)
           fprintf(f, "%s\n", to_hex(h).c_str());
         fflush(f);
-        assert(fdatasync(fileno(f)) == 0);
+        assert(data_sync(fileno(f)) == 0);
         batch.clear();
       }
     }

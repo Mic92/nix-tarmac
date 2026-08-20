@@ -42,6 +42,14 @@ auto blake3_hash(std::string_view data) -> std::string {
 
 namespace {
 
+auto data_sync(int fd) -> int {
+#ifdef __APPLE__
+  return fcntl(fd, F_BARRIERFSYNC);
+#else
+  return fdatasync(fd);
+#endif
+}
+
 constexpr size_t kMapSize = 1UL << 40;
 constexpr size_t kIndexMapSize = 32UL << 30;
 constexpr uint64_t kAutoSyncBytes = 256UL << 20;
@@ -427,7 +435,7 @@ struct PackCas::Impl {
 
   void commit_batch() {
     auto mapping = current();
-    if (fdatasync(mapping->pack_fd) < 0) {
+    if (data_sync(mapping->pack_fd) < 0) {
       sys_err("fdatasync pack");
     }
     mdb_check(mdb_txn_commit(wtxn), "txn_commit");
@@ -732,7 +740,7 @@ void PackCas::compact(const std::function<bool(std::string_view)> &live) {
     }
     mdb_cursor_close(cursor);
     write_all(new_fd, buf);
-    if (fdatasync(new_fd) < 0) {
+    if (data_sync(new_fd) < 0) {
       sys_err("fdatasync new pack");
     }
 

@@ -25,7 +25,8 @@ int main(int argc, char **argv) {
     double t0 = now();
     auto res = ingest_tarball_file(store, argv[i]);
     double dt = now() - t0;
-    printf("ingest     %8lu files in %6.2fs (%.0f files/s)\n", res.files, dt,
+    printf("ingest     %8llu files in %6.2fs (%.0f files/s)\n",
+           static_cast<unsigned long long>(res.files), dt,
            res.files / dt);
     root = res.root;
   }
