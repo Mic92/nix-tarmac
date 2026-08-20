@@ -1,4 +1,6 @@
 // randomized model test: PackCas vs in-memory map, with reopen cycles
+#include "test_tmp.hpp"
+
 #include "pack_cas.hpp"
 
 #include <cassert>
@@ -11,11 +13,8 @@
 #include <vector>
 
 int main(int argc, char **argv) {
-  std::string dir = argc > 1 ? argv[1] : "/tmp/packcas-model-test";
+  std::string dir = argc > 1 ? argv[1] : make_test_dir("packcas-model-test");
   uint64_t seed = argc > 2 ? std::stoull(argv[2]) : 1;
-  std::string cmd = "rm -rf " + dir;
-  if (system(cmd.c_str()) != 0)
-    return 1;
 
   std::mt19937_64 rng(seed);
   std::unordered_map<std::string, std::string> model;

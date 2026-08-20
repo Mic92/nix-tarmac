@@ -1,5 +1,6 @@
 // libFuzzer target: arbitrary bytes as tarball -> ingest must never crash,
 // and everything ingested must be readable back.
+#include "../tests/test_tmp.hpp"
 #include "tree.hpp"
 
 #include <archive.h>
@@ -14,10 +15,7 @@ namespace {
 
 TreeStore &store() {
   static std::unique_ptr<TreeStore> s = [] {
-    std::string dir = "/tmp/tarmac-fuzz-" + std::to_string(getpid());
-    std::string cmd = "rm -rf " + dir;
-    if (system(cmd.c_str()) != 0)
-      abort();
+    std::string dir = make_test_dir("tarmac-fuzz");
     return std::make_unique<TreeStore>(PackCas::open(dir));
   }();
   return *s;

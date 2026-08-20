@@ -1,4 +1,6 @@
 // corruption test: truncated/flipped pack must error or misread, never crash
+#include "test_tmp.hpp"
+
 #include "pack_cas.hpp"
 
 #include <fcntl.h>
@@ -10,10 +12,7 @@
 #include <vector>
 
 int main(int argc, char **argv) {
-  std::string dir = argc > 1 ? argv[1] : "/tmp/packcas-corrupt-test";
-  std::string cmd = "rm -rf " + dir;
-  if (system(cmd.c_str()) != 0)
-    return 1;
+  std::string dir = argc > 1 ? argv[1] : make_test_dir("packcas-corrupt-test");
 
   std::mt19937_64 rng(7);
   std::vector<std::string> hashes;
@@ -71,10 +70,7 @@ int main(int argc, char **argv) {
 
   // truncation while the store is open: get() must throw, never SIGBUS
   {
-    std::string dir2 = dir + "-live";
-    std::string cmd2 = "rm -rf " + dir2;
-    if (system(cmd2.c_str()) != 0)
-      return 1;
+    std::string dir2 = dir + "/live";
     auto cas = PackCas::open(dir2);
     std::vector<std::string> hs;
     for (int i = 0; i < 100; i++)
@@ -97,10 +93,7 @@ int main(int argc, char **argv) {
 
   // trashed index: open() must wipe and start fresh
   {
-    std::string dir3 = dir + "-heal";
-    std::string cmd3 = "rm -rf " + dir3;
-    if (system(cmd3.c_str()) != 0)
-      return 1;
+    std::string dir3 = dir + "/heal";
     {
       auto cas = PackCas::open(dir3);
       (void) cas->put("hello");

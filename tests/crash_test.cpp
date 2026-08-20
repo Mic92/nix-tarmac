@@ -1,5 +1,7 @@
 // multi-process safety: concurrent writers must not lose data, and a
 // SIGKILLed writer must never corrupt the store or lose synced batches
+#include "test_tmp.hpp"
+
 #include "tree.hpp"
 
 #include <fcntl.h>
@@ -118,10 +120,7 @@ void crash_recovery(const std::string &dir) {
 } // namespace
 
 int main(int argc, char **argv) {
-  std::string dir = argc > 1 ? argv[1] : "/tmp/packcas-crash-test";
-  std::string cmd = "rm -rf " + dir;
-  if (system(cmd.c_str()) != 0)
-    return 1;
+  std::string dir = argc > 1 ? argv[1] : make_test_dir("packcas-crash-test");
   concurrent_writers(dir);
   crash_recovery(dir);
   return 0;
