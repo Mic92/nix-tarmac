@@ -26,6 +26,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -471,7 +472,31 @@ void TreeStore::touchRoot(const std::string &root, bool tree) {
   if (now - rbe64(stamp) < touch_interval_ns_) {
     return; // steady state: cache hits write nothing
   }
-  cas_->meta_put(key, be64(now));
+  const std::scoped_lock lock(touch_mutex_);
+  pending_touch_.try_emplace(key, now);
+}
+
+TreeStore::~TreeStore() {
+  try {
+    flush_touches();
+  } catch (...) { // NOLINT(bugprone-empty-catch)
+  }
+}
+
+void TreeStore::sync() {
+  flush_touches();
+  cas_->sync();
+}
+
+void TreeStore::flush_touches() {
+  std::unordered_map<std::string, uint64_t> batch;
+  {
+    const std::scoped_lock lock(touch_mutex_);
+    batch.swap(pending_touch_);
+  }
+  for (const auto &[key, stamp] : batch) {
+    cas_->meta_put(key, be64(stamp));
+  }
 }
 
 auto TreeStore::expire_roots(std::string_view prefix, uint64_t now) -> size_t {
@@ -507,6 +532,7 @@ void TreeStore::mark_live(const std::string &root,
 }
 
 void TreeStore::maybeGc() {
+  flush_touches();
   const uint64_t now = now_ns();
   std::string stamp;
   if (cas_->meta_get("lastgc", stamp) && is_timestamp(stamp) &&

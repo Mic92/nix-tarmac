@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -42,6 +43,12 @@ public:
         gc_interval_ns_(gc_interval.count()),
         touch_interval_ns_(touch_interval.count()) {}
 
+  ~TreeStore();
+  TreeStore(const TreeStore &) = delete;
+  TreeStore(TreeStore &&) = delete;
+  auto operator=(const TreeStore &) -> TreeStore & = delete;
+  auto operator=(TreeStore &&) -> TreeStore & = delete;
+
   auto putBlob(std::string_view data) -> std::string { return cas_->put(data); }
   auto putTree(const std::vector<TreeEntry> &entries) -> std::string;
   auto readTree(const std::string &tree_id) -> std::vector<TreeEntry>;
@@ -54,7 +61,7 @@ public:
     return cas_->size(blob_id, out);
   }
   auto hasTree(const std::string &tree_id) -> bool;
-  void sync() { cas_->sync(); }
+  void sync();
   auto cas() -> PackCas & { return *cas_; }
 
   // blob roots keep a single object alive without a tree walk
@@ -72,8 +79,12 @@ private:
   void mark_live(const std::string &root,
                  std::unordered_set<std::string> &live);
   auto expire_roots(std::string_view prefix, uint64_t now) -> size_t;
+  void flush_touches();
 
   std::unique_ptr<PackCas> cas_;
+  // deferred so read paths never open a write txn
+  std::mutex touch_mutex_;
+  std::unordered_map<std::string, uint64_t> pending_touch_;
   uint64_t ttl_ns_;
   uint64_t gc_interval_ns_;
   uint64_t touch_interval_ns_;

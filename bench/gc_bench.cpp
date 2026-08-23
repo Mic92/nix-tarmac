@@ -4,10 +4,12 @@
 // The compaction pass is what an unlucky process pays at startup.
 #include "tree.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <thread>
 #include <unistd.h>
 #include <vector>
 
@@ -50,6 +52,7 @@ auto main(int argc, char **argv) -> int {
   for (const auto &id : roots) {
     store.touchRoot(id, false);
   }
+  store.sync();
   double dt = now() - t0;
   printf("touch all  %8zu roots in %6.2fs (%.0f/s)\n", nroots, dt, nroots / dt);
 
@@ -58,10 +61,29 @@ auto main(int argc, char **argv) -> int {
   for (size_t i = 0; i < nroots / 2; i++) {
     store.touchRoot(roots[i], false);
   }
+  store.sync();
   t0 = now();
   store.maybeGc();
   printf("gc sweep   %8zu roots in %6.2fs (half expired)\n", nroots,
          now() - t0);
+
+  std::thread writer([&store] {
+    for (int i = 0; i < 500; i++) {
+      store.putBlob("filler-" + std::to_string(i));
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    store.sync();
+  });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  double worst = 0;
+  for (int i = 0; i < 10; i++) {
+    t0 = now();
+    store.touchRoot(roots[i], false);
+    worst = std::max(worst, now() - t0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  writer.join();
+  printf("touch during open write batch: worst %.2f ms\n", worst * 1e3);
 
   size_t alive = 0;
   for (const auto &id : roots) {
