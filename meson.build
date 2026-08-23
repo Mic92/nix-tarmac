@@ -63,7 +63,7 @@ if nix_fetchers.found() and nix_store.found() and nix_util.found()
   ]
   module_suffix = host_machine.system() == 'darwin' ? 'dylib' : 'so'
 
-  shared_module('nix-tarmac', 'plugin/tarmac.cc',
+  shared_module('nix-tarmac', 'plugin/tarmac.cc', 'plugin/store.cc',
     include_directories: 'src',
     link_with: core,
     cpp_args: compat_args,
