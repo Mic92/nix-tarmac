@@ -47,6 +47,15 @@ from a datacenter server, fresh download each run, average of 3 runs
 With the plugin a cold fetch costs barely more than a re-fetch: ingest
 and a single hash pass overlap the download.
 
+## The cache
+
+Everything lives in one content-addressed packfile in
+`~/.cache/nix/tarmac`, shared by the fetcher and the eval store.
+Identical content is stored once, no matter which feature wrote it.
+Entries unused for 30 days are garbage collected automatically. If
+the cache is detected as corrupt it is wiped and everything
+regenerates on the next run.
+
 ## Eval store
 
 The plugin also registers a `tarmac://` store scheme, meant as an
@@ -78,13 +87,10 @@ demand, so `nix build --eval-store tarmac://...` behaves like a
 normal build. The store itself never holds build outputs and signs
 nothing.
 
-Without a path, `tarmac://` uses the tarball cache directory
-(`~/.cache/nix/tarmac`). Both share one packfile, one garbage
-collection pass and the same 30-day retention, and eval records
-survive as long as something reads them. Sharing also means shared
-healing: if the cache is detected as corrupt, it is wiped and
-everything regenerates on the next run. Pass an explicit path like
-`tarmac:///var/cache/evalstore` for an isolated store.
+Without a path, `tarmac://` uses the shared cache described above.
+Eval records survive as long as something reads them. Pass an
+explicit path like `tarmac:///var/cache/evalstore` for an isolated
+store with its own retention.
 
 ## Installation
 
@@ -111,9 +117,6 @@ plugin-files = /path/to/result/lib/nix/plugins/nix-tarmac-loader.so
 ```
 
 or pass `--plugin-files` on the command line.
-
-The cache lives in `~/.cache/nix/tarmac`.
-Inputs unused for 30 days are garbage collected automatically.
 
 ## Supported Nix versions
 
