@@ -69,7 +69,7 @@ The whole jobset output fits in a 112 MB store directory, and a warm
 run issues a single fsync.
 
 ```console
-$ nix-eval-jobs --workers 4 --eval-store tarmac:///tmp/evalstore \
+$ nix-eval-jobs --workers 4 --eval-store tarmac:// \
     --gc-roots-dir /tmp/roots nixos/release-small.nix
 ```
 
@@ -77,6 +77,14 @@ Building works: Nix copies the derivations out to the build store on
 demand, so `nix build --eval-store tarmac://...` behaves like a
 normal build. The store itself never holds build outputs and signs
 nothing.
+
+Without a path, `tarmac://` uses the tarball cache directory
+(`~/.cache/nix/tarmac`). Both share one packfile, one garbage
+collection pass and the same 30-day retention, and eval records
+survive as long as something reads them. Sharing also means shared
+healing: if the cache is detected as corrupt, it is wiped and
+everything regenerates on the next run. Pass an explicit path like
+`tarmac:///var/cache/evalstore` for an isolated store.
 
 ## Installation
 
