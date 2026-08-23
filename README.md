@@ -73,9 +73,10 @@ $ nix-eval-jobs --workers 4 --eval-store tarmac:///tmp/evalstore \
     --gc-roots-dir /tmp/roots nixos/release-small.nix
 ```
 
-The store is not a substitute for a real store: nothing in it can be
-built or copied into a store that expects signatures, and realising
-paths still needs a real store.
+Building works: Nix copies the derivations out to the build store on
+demand, so `nix build --eval-store tarmac://...` behaves like a
+normal build. The store itself never holds build outputs and signs
+nothing.
 
 ## Installation
 

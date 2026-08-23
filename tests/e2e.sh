@@ -84,7 +84,7 @@ buildexpr="derivation {
   system = builtins.currentSystem;
   builder = \"/bin/sh\";
   args = [ \"-c\" \"echo ok > \$out\" ];
-  passthru.note = builtins.toFile \"note.txt\" \"hello\";
+  note = builtins.toFile \"note.txt\" \"hello\";
 }"
 common=(--extra-experimental-features 'nix-command flakes' --impure
   --plugin-files "$plugin" --eval-store "$evalstore")
@@ -99,7 +99,10 @@ drv=$("$nixbin" eval "${common[@]}" --raw --expr "($buildexpr).drvPath")
   exit 1
 }
 # hash-part lookup must find the drv in the meta table
-"$nixbin" path-info "${common[@]}" "${drv:11:32}" >/dev/null || {
+found=$("$nixbin" store path-from-hash-part \
+  --extra-experimental-features 'nix-command flakes' \
+  --plugin-files "$plugin" --store "$evalstore" "${drv:11:32}")
+[[ $found == "$drv" ]] || {
   echo "FAIL evalstore: queryPathFromHashPart" >&2
   exit 1
 }
