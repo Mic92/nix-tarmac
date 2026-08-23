@@ -20,9 +20,6 @@
           config,
           ...
         }:
-        let
-          suffix = if pkgs.stdenv.hostPlatform.isDarwin then "dylib" else "so";
-        in
         {
           options.nix-tarmac.package = lib.mkOption {
             type = lib.types.package;
@@ -40,7 +37,7 @@
             defaultText = "plugin built against config.nix.package";
           };
           config.nix.settings.plugin-files = [
-            "${config.nix-tarmac.package}/lib/nix/plugins/nix-tarmac-loader.${suffix}"
+            "${config.nix-tarmac.package}/lib/nix/plugins/nix-tarmac-loader${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}"
           ];
         };
     in
