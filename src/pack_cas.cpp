@@ -291,8 +291,16 @@ struct PackCas::Impl {
   std::shared_ptr<Mapping> cur;
   std::vector<std::shared_ptr<Mapping>> retired;
 
-  // writer state, valid while the flock is held
+  // writer state, valid while the flock is held. LMDB txns are bound
+  // to one thread, so only the opener may join the batch.
   MDB_txn *wtxn = nullptr;
+  std::thread::id writer_thread;
+
+  [[nodiscard]] auto batch_txn() const -> MDB_txn * {
+    return (wtxn != nullptr && writer_thread == std::this_thread::get_id())
+               ? wtxn
+               : nullptr;
+  }
   uint64_t committed_end = 0; // pack size covered by committed index
   uint64_t end = 0;           // pack size including current batch
   uint64_t batch_bytes = 0;
@@ -419,6 +427,7 @@ struct PackCas::Impl {
     lock_writer();
     try {
       mdb_check(mdb_txn_begin(env, nullptr, 0, &wtxn), "txn_begin");
+      writer_thread = std::this_thread::get_id();
       auto mapping = mapping_for(read_gen(wtxn), true);
       end = committed_end = mapping->file_size();
       mapping->size = end;
@@ -463,7 +472,7 @@ struct PackCas::Impl {
     if (hash.size() != kHashLen) {
       throw std::invalid_argument("bad hash length");
     }
-    const ReadTxn txn(env, wtxn);
+    const ReadTxn txn(env, batch_txn());
     if (gen_out != nullptr) {
       *gen_out = read_gen(txn.get());
     }
@@ -604,6 +613,9 @@ auto PackCas::put(std::string_view data) -> std::string {
   auto &impl = *impl_;
   if (impl.wtxn == nullptr) {
     impl.begin_batch();
+  } else if (impl.batch_txn() == nullptr) {
+    throw std::logic_error(
+        "pack write batch is open in another thread; serialize writers");
   }
   IndexEntry entry{};
   if (impl.lookup(hash, entry, nullptr)) {
@@ -773,7 +785,7 @@ void PackCas::compact(const std::function<bool(std::string_view)> &live) {
 
 void PackCas::meta_put(std::string_view key, std::string_view val) {
   auto &impl = *impl_;
-  WriteTxn txn(impl.env, impl.wtxn);
+  WriteTxn txn(impl.env, impl.batch_txn());
   MDB_val mkey = to_val(key);
   MDB_val mval = to_val(val);
   mdb_check(mdb_put(txn.get(), impl.meta, &mkey, &mval, 0), "mdb_put meta");
@@ -782,7 +794,7 @@ void PackCas::meta_put(std::string_view key, std::string_view val) {
 
 auto PackCas::meta_get(std::string_view key, std::string &out) -> bool {
   auto &impl = *impl_;
-  const ReadTxn txn(impl.env, impl.wtxn);
+  const ReadTxn txn(impl.env, impl.batch_txn());
   MDB_val mkey = to_val(key);
   MDB_val mval;
   const int res = mdb_get(txn.get(), impl.meta, &mkey, &mval);
@@ -796,7 +808,7 @@ auto PackCas::meta_get(std::string_view key, std::string &out) -> bool {
 
 void PackCas::meta_del(std::string_view key) {
   auto &impl = *impl_;
-  WriteTxn txn(impl.env, impl.wtxn);
+  WriteTxn txn(impl.env, impl.batch_txn());
   MDB_val mkey = to_val(key);
   const int res = mdb_del(txn.get(), impl.meta, &mkey, nullptr);
   if (res != MDB_NOTFOUND) {
@@ -809,7 +821,7 @@ void PackCas::meta_scan(
     std::string_view prefix,
     const std::function<bool(std::string_view, std::string_view)> &callback) {
   auto &impl = *impl_;
-  const ReadTxn txn(impl.env, impl.wtxn);
+  const ReadTxn txn(impl.env, impl.batch_txn());
   MDB_cursor *cursor = nullptr;
   mdb_check(mdb_cursor_open(txn.get(), impl.meta, &cursor), "cursor_open");
   MDB_val mkey = to_val(prefix);
