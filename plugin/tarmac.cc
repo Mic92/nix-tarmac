@@ -43,15 +43,9 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 #include <vector>
-
-#if NIX_COMPAT_VERSION_MAJOR > 2 ||                                            \
-    (NIX_COMPAT_VERSION_MAJOR == 2 && NIX_COMPAT_VERSION_MINOR >= 36)
-#define INPUT_FROM_SETTINGS_PARAM
-#else
-#define INPUT_FROM_SETTINGS_PARAM const nix::fetchers::Settings &,
-#endif
 
 namespace {
 
@@ -178,9 +172,17 @@ struct FastTarballInputScheme : nix::fetchers::InputScheme {
     return kAttrs;
   }
 
-  [[nodiscard]] auto
-  inputFromURL(INPUT_FROM_SETTINGS_PARAM const nix::ParsedURL &orig_url,
-               bool requireTree) const -> std::optional<Input> override {
+  // Nix 2.36 dropped the Settings parameter, only one overload overrides
+  [[nodiscard]] auto inputFromURL(const nix::fetchers::Settings & /*s*/,
+                                  const nix::ParsedURL &url,
+                                  bool requireTree) const
+      -> std::optional<Input> {
+    return inputFromURL(url, requireTree);
+  }
+
+  [[nodiscard]] auto inputFromURL(const nix::ParsedURL &orig_url,
+                                  bool requireTree) const
+      -> std::optional<Input> {
     const auto scheme = nix::parseUrlScheme(orig_url.scheme);
     static const nix::StringSet kTransports{"http", "https", "file"};
     if (!kTransports.contains(std::string(scheme.transport))) {
@@ -206,9 +208,14 @@ struct FastTarballInputScheme : nix::fetchers::InputScheme {
     return input;
   }
 
-  [[nodiscard]] auto
-  inputFromAttrs(INPUT_FROM_SETTINGS_PARAM const Attrs &attrs) const
-      -> std::optional<Input> override {
+  [[nodiscard]] auto inputFromAttrs(const nix::fetchers::Settings & /*s*/,
+                                    const Attrs &attrs) const
+      -> std::optional<Input> {
+    return inputFromAttrs(attrs);
+  }
+
+  [[nodiscard]] auto inputFromAttrs(const Attrs &attrs) const
+      -> std::optional<Input> {
     Input input{};
     input.attrs = attrs;
     return input;
@@ -273,7 +280,7 @@ struct FastTarballInputScheme : nix::fetchers::InputScheme {
     std::string root = from_hex(nix::fetchers::getStrAttr(info, "root"));
     ctx.store.touchRoot(root);
     auto accessor = nix::make_ref<PackAccessor>(ctx.store, std::move(root),
-                                              [] { Ctx::get().poison(); });
+                                                [] { Ctx::get().poison(); });
     accessor->setPathDisplay("«" + input.to_string() + "»");
     return {accessor, input};
   }
@@ -329,6 +336,8 @@ private:
     };
   }
 };
+
+static_assert(!std::is_abstract_v<FastTarballInputScheme>);
 
 [[maybe_unused]] const auto kRegisterScheme = nix::OnStartup([] -> void {
   // evict the builtin so plain https://...tar.gz URLs hit this scheme;

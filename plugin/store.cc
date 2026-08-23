@@ -1,6 +1,11 @@
 // Persistent Nix store backed by the pack CAS, registered as the
 // "tarmac" URI scheme. Meant as an --eval-store. Unlike dummy:// it
 // survives evaluator restarts, so store objects are written only once.
+// The store API churned before 2.35, older versions only get the
+// fetcher.
+#if NIX_COMPAT_VERSION_MAJOR > 2 ||                                            \
+    (NIX_COMPAT_VERSION_MAJOR == 2 && NIX_COMPAT_VERSION_MINOR >= 35)
+
 #include "pack_accessor.hh"
 #include "pack_cas.hpp"
 #include "tree.hpp"
@@ -348,9 +353,22 @@ struct TarmacStore : nix::Store {
     return nix::Trusted;
   }
 
-  auto queryPathFromHashPart(const std::string & /*hashPart*/)
+  auto queryPathFromHashPart(const std::string &hashPart)
       -> std::optional<nix::StorePath> override {
-    unsupported("queryPathFromHashPart");
+    std::optional<nix::StorePath> res;
+    for (const auto prefix : {kPathPrefix, kDrvPrefix}) {
+      std::string scan(prefix);
+      scan += hashPart;
+      state->tree.cas().meta_scan(
+          scan, [&](std::string_view key, std::string_view /*val*/) {
+            res = nix::StorePath{key.substr(prefix.size())};
+            return false;
+          });
+      if (res) {
+        break;
+      }
+    }
+    return res;
   }
 
   void rejectRepair(nix::RepairFlag repair) {
@@ -614,3 +632,5 @@ auto TarmacStoreConfig::openStore() const -> nix::ref<nix::Store> {
 nix::RegisterStoreImplementation<TarmacStoreConfig> regTarmacStore;
 
 } // namespace
+
+#endif

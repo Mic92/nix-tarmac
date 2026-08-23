@@ -72,3 +72,40 @@ grep -q 'falling back to the builtin fetcher' "$work/degrade.log" || {
   exit 1
 }
 echo "OK degrade: builtin fallback on nix_2_31"
+
+# eval store: drvs land in the pack CAS, building copies them out to
+# the real store on demand
+nixbin=$(nix build --no-link --print-out-paths "nixpkgs#nixVersions.nix_2_35.out")/bin/nix
+plugin=$(nix build --no-link --print-out-paths "$repo#plugin-nix_2_35")/lib/nix/plugins
+export XDG_CACHE_HOME="$work/cache-evalstore"
+evalstore="tarmac://$work/evalstore"
+buildexpr="derivation {
+  name = \"tarmac-e2e\";
+  system = builtins.currentSystem;
+  builder = \"/bin/sh\";
+  args = [ \"-c\" \"echo ok > \$out\" ];
+  passthru.note = builtins.toFile \"note.txt\" \"hello\";
+}"
+common=(--extra-experimental-features 'nix-command flakes' --impure
+  --plugin-files "$plugin" --eval-store "$evalstore")
+
+drv=$("$nixbin" eval "${common[@]}" --raw --expr "($buildexpr).drvPath")
+[[ -e $work/evalstore/pack.0 ]] || {
+  echo "FAIL evalstore: store not populated" >&2
+  exit 1
+}
+[[ -e $drv ]] && {
+  echo "FAIL evalstore: drv leaked into /nix/store" >&2
+  exit 1
+}
+# hash-part lookup must find the drv in the meta table
+"$nixbin" path-info "${common[@]}" "${drv:11:32}" >/dev/null || {
+  echo "FAIL evalstore: queryPathFromHashPart" >&2
+  exit 1
+}
+out=$("$nixbin" build "${common[@]}" --no-link --print-out-paths --expr "$buildexpr")
+[[ $(cat "$out") == ok ]] || {
+  echo "FAIL evalstore: build output mismatch" >&2
+  exit 1
+}
+echo "OK evalstore: eval + build via $evalstore"
