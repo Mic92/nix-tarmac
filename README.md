@@ -1,6 +1,10 @@
 # nix-tarmac
 
-Nix plugin that speeds up fetching of tarball flake inputs.
+Nix plugin with a content-addressed cache that speeds up two things:
+fetching tarball flake inputs, and evaluation via a persistent
+`tarmac://` eval store.
+
+## Tarball fetcher
 
 Nix unpacks every tarball input (nixpkgs, flake-utils, anything pinned to a `.tar.gz` URL) into a bare Git repository (`~/.cache/nix/tarball-cache-v2`).
 Each file is SHA-1 hashed and zlib-compressed.
