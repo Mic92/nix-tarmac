@@ -39,6 +39,7 @@ core_dep = declare_dependency(link_with: core, include_directories: 'src',
   dependencies: core_deps)
 
 executable('bench', 'bench/bench.cpp', dependencies: core_dep)
+executable('gc_bench', 'bench/gc_bench.cpp', dependencies: core_dep)
 
 foreach t : ['model_test', 'corrupt_test', 'nar_test', 'crash_test', 'gc_test']
   test(t, executable(t, 'tests' / t + '.cpp', dependencies: core_dep),
