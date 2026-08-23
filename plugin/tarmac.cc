@@ -1,5 +1,6 @@
 // Replaces Nix's builtin "tarball" input scheme with one backed by the
 // pack CAS.
+#include "pack_accessor.hh"
 #include "pack_cas.hpp"
 #include "tree.hpp"
 
@@ -95,107 +96,6 @@ template <typename Func> auto healing(Func func) {
                      err.what());
   }
 }
-
-auto entry_type(char type) -> nix::SourceAccessor::Type {
-  switch (type) {
-  case 'd':
-    return nix::SourceAccessor::tDirectory;
-  case 's':
-    return nix::SourceAccessor::tSymlink;
-  default:
-    return nix::SourceAccessor::tRegular;
-  }
-}
-
-class PackAccessor : public nix::SourceAccessor {
-public:
-  PackAccessor(TreeStore &store, std::string root)
-      : store_(&store), root_(std::move(root)), walker_(store) {
-    fingerprint = "tarmac:" + to_hex(root_);
-  }
-
-#if NIX_COMPAT_VERSION_MAJOR > 2 ||                                            \
-    (NIX_COMPAT_VERSION_MAJOR == 2 && NIX_COMPAT_VERSION_MINOR >= 35)
-  void anchor() override {}
-#endif
-
-  void readFile(const nix::CanonPath &path, nix::Sink &sink,
-                nix::fun<void(uint64_t)> sizeCallback) override {
-    const auto entry = find(path);
-    if (!entry || entry->type == 'd' || entry->type == 's') {
-      throw nix::Error("path '%s' is not a regular file", path);
-    }
-    std::string scratch;
-    std::string_view contents;
-    if (!healing([&] -> bool {
-          return store_->readBlobView(entry->id, scratch, contents);
-        })) {
-      throw nix::Error("missing blob for '%s'", path);
-    }
-    sizeCallback(contents.size());
-    sink(contents);
-  }
-
-  auto pathExists(const nix::CanonPath &path) -> bool override {
-    return find(path).has_value();
-  }
-
-  auto maybeLstat(const nix::CanonPath &path) -> std::optional<Stat> override {
-    const auto entry = find(path);
-    if (!entry) {
-      return std::nullopt;
-    }
-    Stat info;
-    info.type = entry_type(entry->type);
-    if (info.type == tRegular) {
-      info.isExecutable = entry->type == 'x';
-      uint64_t size = 0;
-      if (store_->blobSize(entry->id, size)) {
-        info.fileSize = size;
-      }
-    }
-    return info;
-  }
-
-  auto readDirectory(const nix::CanonPath &path) -> DirEntries override {
-    const auto entry = find(path);
-    if (!entry || entry->type != 'd') {
-      throw nix::Error("path '%s' is not a directory", path);
-    }
-    DirEntries res;
-    for (const auto &child : healing([&] -> std::vector<TreeEntry> {
-           return store_->readTree(entry->id);
-         })) {
-      res.emplace(child.name, entry_type(child.type));
-    }
-    return res;
-  }
-
-  auto readLink(const nix::CanonPath &path) -> std::string override {
-    const auto entry = find(path);
-    if (!entry || entry->type != 's') {
-      throw nix::Error("path '%s' is not a symlink", path);
-    }
-    return healing([&] -> std::string { return store_->readBlob(entry->id); });
-  }
-
-private:
-  auto find(const nix::CanonPath &path) -> std::optional<TreeEntry> {
-    return healing([&] -> std::optional<TreeEntry> {
-      const std::scoped_lock lock(mutex_);
-      TreeEntry entry;
-      if (!walker_.lookup(root_, path.rel(), entry)) {
-        return std::nullopt;
-      }
-      return entry;
-    });
-  }
-
-  TreeStore *store_;
-  std::string root_;
-  TreeWalker walker_;
-  std::mutex mutex_; // TreeWalker cache is not thread-safe
-};
 
 // libarchive read callback over a Nix Source
 class SourceReader {
@@ -372,7 +272,8 @@ struct FastTarballInputScheme : nix::fetchers::InputScheme {
 
     std::string root = from_hex(nix::fetchers::getStrAttr(info, "root"));
     ctx.store.touchRoot(root);
-    auto accessor = nix::make_ref<PackAccessor>(ctx.store, std::move(root));
+    auto accessor = nix::make_ref<PackAccessor>(ctx.store, std::move(root),
+                                              [] { Ctx::get().poison(); });
     accessor->setPathDisplay("«" + input.to_string() + "»");
     return {accessor, input};
   }
