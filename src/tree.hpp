@@ -57,8 +57,9 @@ public:
   void sync() { cas_->sync(); }
   auto cas() -> PackCas & { return *cas_; }
 
-  void registerRoot(const std::string &root);
-  void touchRoot(const std::string &root);
+  // blob roots keep a single object alive without a tree walk
+  void registerRoot(const std::string &root, bool tree = true);
+  void touchRoot(const std::string &root, bool tree = true);
   void maybeGc();
 
   struct RootInfo {
@@ -70,6 +71,7 @@ public:
 private:
   void mark_live(const std::string &root,
                  std::unordered_set<std::string> &live);
+  auto expire_roots(std::string_view prefix, uint64_t now) -> size_t;
 
   std::unique_ptr<PackCas> cas_;
   uint64_t ttl_ns_;

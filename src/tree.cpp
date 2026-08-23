@@ -451,22 +451,42 @@ auto now_ns() -> uint64_t {
           .count());
 }
 
-} // namespace
-
-void TreeStore::registerRoot(const std::string &root) {
-  cas_->meta_put("R" + root, be64(now_ns()));
+auto root_key(const std::string &root, bool tree) -> std::string {
+  return (tree ? "R" : "B") + root;
 }
 
-void TreeStore::touchRoot(const std::string &root) {
+} // namespace
+
+void TreeStore::registerRoot(const std::string &root, bool tree) {
+  cas_->meta_put(root_key(root, tree), be64(now_ns()));
+}
+
+void TreeStore::touchRoot(const std::string &root, bool tree) {
+  const std::string key = root_key(root, tree);
   std::string stamp;
-  if (!cas_->meta_get("R" + root, stamp) || !is_timestamp(stamp)) {
+  if (!cas_->meta_get(key, stamp) || !is_timestamp(stamp)) {
     return;
   }
   const uint64_t now = now_ns();
   if (now - rbe64(stamp) < touch_interval_ns_) {
     return; // steady state: cache hits write nothing
   }
-  cas_->meta_put("R" + root, be64(now));
+  cas_->meta_put(key, be64(now));
+}
+
+auto TreeStore::expire_roots(std::string_view prefix, uint64_t now) -> size_t {
+  std::vector<std::string> expired;
+  cas_->meta_scan(prefix,
+                  [&](std::string_view key, std::string_view val) -> bool {
+                    if (is_timestamp(val) && now - rbe64(val) >= ttl_ns_) {
+                      expired.emplace_back(key);
+                    }
+                    return true;
+                  });
+  for (const auto &key : expired) {
+    cas_->meta_del(key);
+  }
+  return expired.size();
 }
 
 void TreeStore::mark_live(const std::string &root,
@@ -494,15 +514,7 @@ void TreeStore::maybeGc() {
     return;
   }
   cas_->meta_put("lastgc", be64(now));
-  size_t expired = 0;
-  for (const auto &info : roots_info()) {
-    if (now - info.last_access < ttl_ns_) {
-      continue;
-    }
-    cas_->meta_del("R" + info.root);
-    expired++;
-  }
-  if (expired == 0) {
+  if (expire_roots("R", now) + expire_roots("B", now) == 0) {
     return;
   }
   std::unordered_set<std::string> live;
@@ -519,6 +531,10 @@ void TreeStore::maybeGc() {
   for (const auto &root : broken) {
     cas_->meta_del("R" + root);
   }
+  cas_->meta_scan("B", [&](std::string_view key, std::string_view) -> bool {
+    live.insert(std::string(key.substr(1)));
+    return true;
+  });
   cas_->compact([&](std::string_view hash) -> bool {
     return live.contains(std::string(hash));
   });

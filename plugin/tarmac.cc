@@ -1,5 +1,6 @@
 // Replaces Nix's builtin "tarball" input scheme with one backed by the
 // pack CAS.
+#include "ctx.hh"
 #include "pack_accessor.hh"
 #include "pack_cas.hpp"
 #include "tree.hpp"
@@ -51,41 +52,11 @@ namespace {
 
 constexpr size_t kDownloadChunk = 1 << 16;
 
-struct Ctx {
-  std::mutex mutex; // single writer; reads are lock-free
-  std::string dir;
-  TreeStore store;
-
-  Ctx()
-      : dir((nix::getCacheDir() / "tarmac").string()), store(openHealed(dir)) {
-    try {
-      store.maybeGc();
-    } catch (const std::exception &err) {
-      nix::warn("nix-tarmac: garbage collection failed: %s", err.what());
-    }
-  }
-
-  static auto openHealed(const std::string &dir) -> std::unique_ptr<PackCas> {
-    std::error_code err;
-    if (std::filesystem::exists(dir + "/poison", err)) {
-      std::filesystem::remove_all(dir, err);
-    }
-    return PackCas::open(dir);
-  }
-
-  void poison() const { std::ofstream(dir + "/poison") << "corrupt\n"; }
-
-  static auto get() -> Ctx & {
-    static Ctx ctx;
-    return ctx;
-  }
-};
-
 template <typename Func> auto healing(Func func) {
   try {
     return func();
   } catch (const CorruptError &err) {
-    Ctx::get().poison();
+    Ctx::get()->poison();
     throw nix::Error("tarmac cache is corrupt (%s); it resets on the next run",
                      err.what());
   }
@@ -249,7 +220,7 @@ struct FastTarballInputScheme : nix::fetchers::InputScheme {
       -> std::pair<nix::ref<nix::SourceAccessor>, Input> override {
     auto input(orig_input);
     const auto url = nix::fetchers::getStrAttr(input.attrs, "url");
-    auto &ctx = Ctx::get();
+    auto &ctx = *Ctx::get();
 
     const nix::fetchers::Cache::Key key{"tarmac", {{"url", url}}};
     auto cached = settings.getCache()->lookupExpired(key);
@@ -280,7 +251,7 @@ struct FastTarballInputScheme : nix::fetchers::InputScheme {
     std::string root = from_hex(nix::fetchers::getStrAttr(info, "root"));
     ctx.store.touchRoot(root);
     auto accessor = nix::make_ref<PackAccessor>(ctx.store, std::move(root),
-                                                [] { Ctx::get().poison(); });
+                                                [] { Ctx::get()->poison(); });
     accessor->setPathDisplay("«" + input.to_string() + "»");
     return {accessor, input};
   }
@@ -290,7 +261,7 @@ private:
 
   static auto download(const Settings &settings, const std::string &url,
                        const CachedResult &cached) -> Attrs {
-    auto &ctx = Ctx::get();
+    auto &ctx = *Ctx::get();
     nix::FileTransferRequest req{nix::VerbatimURL{url}};
     if (cached) {
       req.expectedETag = nix::fetchers::getStrAttr(cached->value, "etag");

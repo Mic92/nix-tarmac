@@ -9,8 +9,8 @@
 #include <cassert>
 #include <chrono>
 #include <cstdio>
-#include <unistd.h>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -23,8 +23,8 @@ std::string make_tar(unsigned id) {
   archive_write_set_format_pax_restricted(a);
   archive_write_open_memory(a, buf.data(), buf.size(), &used);
   for (unsigned f = 0; f < 50; f++) {
-    std::string data = "tarball-" + std::to_string(id) + "-file-" +
-                       std::to_string(f) + "-";
+    std::string data =
+        "tarball-" + std::to_string(id) + "-file-" + std::to_string(f) + "-";
     data.resize(2000, static_cast<char>('a' + id % 26));
     std::string name =
         "root/dir" + std::to_string(f % 5) + "/f" + std::to_string(f);
@@ -65,6 +65,11 @@ int main(int argc, char **argv) {
   uint64_t size0;
   std::string nar0 = nar_sha256(store, first.root, size0);
 
+  std::string warm_blob = store.putBlob("blob kept alive by touch");
+  store.registerRoot(warm_blob, false);
+  std::string cold_blob = store.putBlob("blob left to expire");
+  store.registerRoot(cold_blob, false);
+
   std::vector<IngestResult> roots;
   for (unsigned id = 1; id <= 5; id++)
     roots.push_back(ingest(store, id));
@@ -73,6 +78,7 @@ int main(int argc, char **argv) {
   // age everything past the TTL, keep tarball 0 alive
   usleep(300'000);
   store.touchRoot(first.root);
+  store.touchRoot(warm_blob, false);
   auto last = ingest(store, 6);
 
   uint64_t size = store.cas().pack_size();
@@ -92,6 +98,9 @@ int main(int argc, char **argv) {
       evicted++;
   printf("evicted %zu of %zu cold roots\n", evicted, roots.size());
   assert(evicted == roots.size());
+
+  assert(store.cas().has(warm_blob));
+  assert(!store.cas().has(cold_blob));
 
   auto again = ingest(store, 1);
   assert(store.hasTree(again.root));

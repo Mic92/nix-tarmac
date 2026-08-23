@@ -79,8 +79,9 @@ nixbin=$(nix build --no-link --print-out-paths "nixpkgs#nixVersions.nix_2_35.out
 plugin=$(nix build --no-link --print-out-paths "$repo#plugin-nix_2_35")/lib/nix/plugins
 export XDG_CACHE_HOME="$work/cache-evalstore"
 evalstore="tarmac://$work/evalstore"
+# a fresh salt keeps the drv out of /nix/store from earlier runs
 buildexpr="derivation {
-  name = \"tarmac-e2e\";
+  name = \"tarmac-e2e-$RANDOM$RANDOM\";
   system = builtins.currentSystem;
   builder = \"/bin/sh\";
   args = [ \"-c\" \"echo ok > \$out\" ];

@@ -6,6 +6,7 @@
 #if NIX_COMPAT_VERSION_MAJOR > 2 ||                                            \
     (NIX_COMPAT_VERSION_MAJOR == 2 && NIX_COMPAT_VERSION_MINOR >= 35)
 
+#include "ctx.hh"
 #include "pack_accessor.hh"
 #include "pack_cas.hpp"
 #include "tree.hpp"
@@ -29,7 +30,6 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
-#include <filesystem>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -44,26 +44,6 @@ namespace {
 
 constexpr std::string_view kPathPrefix = "sp:";
 constexpr std::string_view kDrvPrefix = "sd:";
-
-// one per directory, shared between Store instances of a process
-struct StoreState {
-  std::mutex write_mutex; // PackCas allows one writer per process
-  TreeStore tree;
-
-  explicit StoreState(const std::string &dir) : tree(PackCas::open(dir)) {}
-};
-
-auto stateFor(const std::string &dir) -> std::shared_ptr<StoreState> {
-  static std::mutex mutex;
-  static std::map<std::string, std::shared_ptr<StoreState>> states;
-  const std::scoped_lock lock(mutex);
-  auto &state = states[dir];
-  if (!state) {
-    std::filesystem::create_directories(dir);
-    state = std::make_shared<StoreState>(dir);
-  }
-  return state;
-}
 
 // what queryPathInfo needs, keyed by store path basename in the meta
 // table. The file system objects live in the CAS behind root_id.
@@ -219,7 +199,7 @@ struct TarmacStoreConfig : std::enable_shared_from_this<TarmacStoreConfig>,
 
   explicit TarmacStoreConfig(const Params &params)
       : StoreConfig(params, nix::StoreConfig::FilePathType::Unix),
-        dir((nix::getCacheDir() / "tarmac-store").string()) {
+        dir(Ctx::defaultDir()) {
     // the in-memory cache would keep stale misses for paths that are
     // added after being queried
     pathInfoCacheSize = 0;
@@ -261,19 +241,24 @@ struct TarmacStore : nix::Store {
   using Config = TarmacStoreConfig;
 
   nix::ref<const Config> config;
-  std::shared_ptr<StoreState> state;
+  std::shared_ptr<Ctx> state;
 
   explicit TarmacStore(nix::ref<const Config> conf)
-      : Store{*conf}, config(conf), state(stateFor(conf->dir)) {}
+      : Store{*conf}, config(conf), state(Ctx::get(conf->dir)) {}
 
   void anchor() override {}
 
-  auto metaGet(std::string_view prefix, const nix::StorePath &path)
-      -> std::optional<std::string> {
+  auto metaKey(std::string_view prefix, const nix::StorePath &path)
+      -> std::string {
     std::string key(prefix);
     key += path.to_string();
+    return key;
+  }
+
+  auto metaGet(std::string_view prefix, const nix::StorePath &path)
+      -> std::optional<std::string> {
     std::string out;
-    if (!state->tree.cas().meta_get(key, out)) {
+    if (!state->store.cas().meta_get(metaKey(prefix, path), out)) {
       return std::nullopt;
     }
     return out;
@@ -281,9 +266,36 @@ struct TarmacStore : nix::Store {
 
   void metaPut(std::string_view prefix, const nix::StorePath &path,
                std::string_view val) {
-    std::string key(prefix);
-    key += path.to_string();
-    state->tree.cas().meta_put(key, val);
+    state->store.cas().meta_put(metaKey(prefix, path), val);
+  }
+
+  // GC may have collected the record's objects, drop it then
+  auto pathRecord(const nix::StorePath &path) -> std::optional<PathRecord> {
+    auto raw = metaGet(kPathPrefix, path);
+    if (!raw) {
+      return std::nullopt;
+    }
+    auto rec = PathRecord::decode(*raw);
+    if (!state->store.cas().has(rec.root_id)) {
+      state->store.cas().meta_del(metaKey(kPathPrefix, path));
+      return std::nullopt;
+    }
+    state->store.touchRoot(rec.root_id, rec.root_type == 'd');
+    return rec;
+  }
+
+  auto drvText(const nix::StorePath &path) -> std::optional<std::string> {
+    auto id = metaGet(kDrvPrefix, path);
+    if (!id) {
+      return std::nullopt;
+    }
+    std::string text;
+    if (!state->store.cas().get(*id, text)) {
+      state->store.cas().meta_del(metaKey(kDrvPrefix, path));
+      return std::nullopt;
+    }
+    state->store.touchRoot(*id, false);
+    return text;
   }
 
   auto drvPathInfo(const nix::StorePath &path, std::string text)
@@ -330,12 +342,12 @@ struct TarmacStore : nix::Store {
                             callback) noexcept override {
     try {
       if (path.isDerivation()) {
-        if (auto text = metaGet(kDrvPrefix, path)) {
+        if (auto text = drvText(path)) {
           callback(drvPathInfo(path, std::move(*text)));
           return;
         }
-      } else if (auto raw = metaGet(kPathPrefix, path)) {
-        callback(pathInfo(path, PathRecord::decode(*raw)));
+      } else if (auto rec = pathRecord(path)) {
+        callback(pathInfo(path, *rec));
         return;
       }
       callback(nullptr);
@@ -345,8 +357,8 @@ struct TarmacStore : nix::Store {
   }
 
   auto isValidPathUncached(const nix::StorePath &path) -> bool override {
-    return metaGet(path.isDerivation() ? kDrvPrefix : kPathPrefix, path)
-        .has_value();
+    return path.isDerivation() ? drvText(path).has_value()
+                               : pathRecord(path).has_value();
   }
 
   auto isTrustedClient() -> std::optional<nix::TrustedFlag> override {
@@ -359,7 +371,7 @@ struct TarmacStore : nix::Store {
     for (const auto prefix : {kPathPrefix, kDrvPrefix}) {
       std::string scan(prefix);
       scan += hashPart;
-      state->tree.cas().meta_scan(
+      state->store.cas().meta_scan(
           scan, [&](std::string_view key, std::string_view /*val*/) {
             res = nix::StorePath{key.substr(prefix.size())};
             return false;
@@ -380,8 +392,8 @@ struct TarmacStore : nix::Store {
 
   void storeObject(const nix::ValidPathInfo &info,
                    const nix::MemorySourceAccessor::File &file) {
-    const std::scoped_lock lock(state->write_mutex);
-    auto [type, id] = ingest(state->tree, file);
+    const std::scoped_lock lock(state->mutex);
+    auto [type, id] = ingest(state->store, file);
     PathRecord rec;
     rec.root_type = type;
     rec.root_id = std::move(id);
@@ -391,9 +403,10 @@ struct TarmacStore : nix::Store {
     for (const auto &ref : info.references) {
       rec.refs.emplace_back(ref.to_string());
     }
+    state->store.registerRoot(rec.root_id, rec.root_type == 'd');
     metaPut(kPathPrefix, info.path, rec.encode());
     // commit promptly, the writer flock blocks other eval workers
-    state->tree.sync();
+    state->store.sync();
   }
 
   void addToStore(const nix::ValidPathInfo &info, nix::Source &source,
@@ -407,7 +420,7 @@ struct TarmacStore : nix::Store {
                                       accessor->readFile(nix::CanonPath::root),
                                       nix::Derivation::nameFromPath(info.path)),
                       nix::NoRepair);
-    } else if (!metaGet(kPathPrefix, info.path)) {
+    } else if (!pathRecord(info.path)) {
       storeObject(info, *accessor->root);
     }
   }
@@ -443,7 +456,7 @@ struct TarmacStore : nix::Store {
         std::move(narHash.first));
     info.narSize = narHash.second.value();
 
-    if (!metaGet(kPathPrefix, info.path)) {
+    if (!pathRecord(info.path)) {
       storeObject(info, *accessor->root);
     }
     return info.path;
@@ -452,17 +465,19 @@ struct TarmacStore : nix::Store {
   auto writeDerivation(const nix::Derivation &drv, nix::RepairFlag /*repair*/)
       -> nix::StorePath override {
     auto drvPath = nix::computeStorePath(*this, drv);
-    if (!metaGet(kDrvPrefix, drvPath)) {
-      const std::scoped_lock lock(state->write_mutex);
-      metaPut(kDrvPrefix, drvPath, drv.unparse(*this, false));
-      state->tree.sync();
+    if (!drvText(drvPath)) {
+      const std::scoped_lock lock(state->mutex);
+      const auto id = state->store.putBlob(drv.unparse(*this, false));
+      state->store.registerRoot(id, false);
+      metaPut(kDrvPrefix, drvPath, id);
+      state->store.sync();
     }
     return drvPath;
   }
 
   auto readDerivation(const nix::StorePath &drvPath)
       -> nix::Derivation override {
-    auto text = metaGet(kDrvPrefix, drvPath);
+    auto text = drvText(drvPath);
     if (!text) {
       throw nix::Error("derivation '%s' is not valid", printStorePath(drvPath));
     }
@@ -489,22 +504,21 @@ struct TarmacStore : nix::Store {
   auto accessorFor(const nix::StorePath &path)
       -> std::shared_ptr<nix::SourceAccessor> {
     if (path.isDerivation()) {
-      auto text = metaGet(kDrvPrefix, path);
+      auto text = drvText(path);
       if (!text) {
         return nullptr;
       }
       return drvAccessor(std::move(*text)).get_ptr();
     }
-    auto raw = metaGet(kPathPrefix, path);
-    if (!raw) {
+    auto rec = pathRecord(path);
+    if (!rec) {
       return nullptr;
     }
-    const auto rec = PathRecord::decode(*raw);
-    if (rec.root_type == 'd') {
-      return std::make_shared<PackAccessor>(state->tree, rec.root_id);
+    if (rec->root_type == 'd') {
+      return std::make_shared<PackAccessor>(state->store, rec->root_id);
     }
-    return std::make_shared<BlobAccessor>(state->tree, rec.root_type,
-                                          rec.root_id);
+    return std::make_shared<BlobAccessor>(state->store, rec->root_type,
+                                          rec->root_id);
   }
 
   auto getFSAccessor(const nix::StorePath &path, bool /*requireValidPath*/)
