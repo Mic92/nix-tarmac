@@ -47,6 +47,36 @@ from a datacenter server, fresh download each run, average of 3 runs
 With the plugin a cold fetch costs barely more than a re-fetch: ingest
 and a single hash pass overlap the download.
 
+## Eval store
+
+The plugin also registers a `tarmac://` store scheme, meant as an
+`--eval-store`. It keeps evaluation outputs (derivations, `writeText`
+files) in the same packfile format instead of writing them to
+/nix/store with SQLite registration. Unlike `dummy://` it is
+persistent, so restarted evaluator workers and repeated runs skip all
+writes.
+
+Evaluating the NixOS release-small jobset with nix-eval-jobs and 4
+workers on a 16-core server (`bench/eval_bench.sh`):
+
+| | wall time |
+|---|---|
+| /nix/store | 207 s |
+| `tarmac://`, cold | 164 s |
+| `tarmac://`, warm | 140 s |
+
+The whole jobset output fits in a 112 MB store directory, and a warm
+run issues a single fsync.
+
+```console
+$ nix-eval-jobs --workers 4 --eval-store tarmac:///tmp/evalstore \
+    --gc-roots-dir /tmp/roots nixos/release-small.nix
+```
+
+The store is not a substitute for a real store: nothing in it can be
+built or copied into a store that expects signatures, and realising
+paths still needs a real store.
+
 ## Installation
 
 On NixOS, add the flake input and import the module:
