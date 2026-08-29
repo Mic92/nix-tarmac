@@ -1,27 +1,29 @@
-// dlopen()s the plugin build matching the running Nix. Must not use any
-// Nix API beyond the version string.
+// dlopen()s the plugin build whose Nix libraries are the ones already
+// mapped into this process. Must not use any Nix API.
+//
+// Each build lives in nix-tarmac-versions/<soversion>/ and links against
+// libnixstore with exactly that SONAME. Loading a build for any other
+// SONAME would pull a second copy of the Nix libraries into the process,
+// which appears to work and then double-frees their globals at exit.
 #include <dlfcn.h>
 
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
-#include <string_view>
-
-namespace nix {
-// declared by Nix itself, so it has to stay a mutable std::string
-extern std::string
-    nixVersion; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
-} // namespace nix
+#include <system_error>
 
 namespace {
 
-// "2.35.2" / "2.36pre20260813_8529b7a" -> "2.35" / "2.36"
-auto major_minor(std::string_view version) -> std::string_view {
-  const auto first_dot = version.find('.');
-  const auto end = version.find_first_not_of("0123456789", first_dot + 1);
-  return version.substr(0, end);
+#ifdef __APPLE__
+auto nix_store_soname(const std::string &soversion) -> std::string {
+  return "libnixstore." + soversion + ".dylib";
 }
+#else
+auto nix_store_soname(const std::string &soversion) -> std::string {
+  return "libnixstore.so." + soversion;
+}
+#endif
 
 void warn(const std::string &message) {
   const std::string line =
@@ -29,7 +31,16 @@ void warn(const std::string &message) {
   std::fputs(line.c_str(), stderr);
 }
 
-auto plugin_for_running_nix() -> std::filesystem::path {
+auto host_has(const std::string &soname) -> bool {
+  void *handle = dlopen(soname.c_str(), RTLD_LAZY | RTLD_NOLOAD);
+  if (handle == nullptr) {
+    return false;
+  }
+  dlclose(handle);
+  return true;
+}
+
+auto versions_dir() -> std::filesystem::path {
   // any object inside this shared object locates the file it was loaded from
   static const int kAnchor = 0;
   Dl_info info{};
@@ -37,8 +48,18 @@ auto plugin_for_running_nix() -> std::filesystem::path {
     return {};
   }
   return std::filesystem::path(info.dli_fname).parent_path().parent_path() /
-         "nix-tarmac-versions" / major_minor(nix::nixVersion) /
-         ("nix-tarmac." TARMAC_MODULE_SUFFIX);
+         "nix-tarmac-versions";
+}
+
+auto plugin_for_running_nix() -> std::filesystem::path {
+  const auto dir = versions_dir();
+  std::error_code ec;
+  for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
+    if (host_has(nix_store_soname(entry.path().filename().string()))) {
+      return entry.path() / ("nix-tarmac." TARMAC_MODULE_SUFFIX);
+    }
+  }
+  return {};
 }
 
 } // namespace
@@ -53,8 +74,8 @@ extern "C" [[gnu::visibility("default")]] void nix_plugin_entry() {
     plugin = plugin_for_running_nix();
   }
   if (plugin.empty() || !std::filesystem::exists(plugin)) {
-    warn("no plugin build for Nix " + nix::nixVersion + " at '" +
-         plugin.string() + "'");
+    warn("no plugin build matching the loaded libnixstore in '" +
+         versions_dir().string() + "'");
     return;
   }
   if (dlopen(plugin.c_str(), RTLD_NOW | RTLD_GLOBAL) == nullptr) {
