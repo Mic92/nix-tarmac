@@ -2,12 +2,31 @@
 {
   lib,
   newScope,
+  fetchFromGitHub,
   nixVersions,
   symlinkJoin,
 }:
 lib.makeScope newScope (
   self:
   let
+    # nixpkgs' nixVersions.git lags behind master; track it closer so API
+    # breakage shows up here before downstream flakes pull a newer nix.
+    # Bumped daily by the update-nix-git effect (effects.nix).
+    nixGitPin = lib.importJSON ./nix-git.json;
+    nixGitSrc = fetchFromGitHub {
+      inherit (nixGitPin)
+        owner
+        repo
+        rev
+        hash
+        ;
+    };
+    nixGit =
+      ((nixVersions.nixComponents_git.overrideSource nixGitSrc).overrideScope (
+        _final: _prev: { inherit (nixGitPin) version; }
+      )).nix-everything;
+    libsFor = version: if version == "git" then nixGit.libs else nixVersions.${version}.libs;
+
     supportedNixVersions = builtins.filter (
       name:
       builtins.match "nix_[0-9]+_[0-9]+" name != null
@@ -29,7 +48,7 @@ lib.makeScope newScope (
         version:
         lib.nameValuePair "plugin-${version}" (
           self.callPackage ./package.nix {
-            inherit (nixVersions.${version}.libs) nix-fetchers nix-store nix-util;
+            inherit (libsFor version) nix-fetchers nix-store nix-util;
           }
         )
       ) (supportedNixVersions ++ [ "git" ])
