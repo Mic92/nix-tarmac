@@ -5,11 +5,12 @@ let
   inherit (nixbot.lib.effects { inherit pkgs; }) mkEffect;
 in
 {
-  # Daily bump of nix-git.json so API breakage in Nix master shows up here
+  # Weekly bump of nix-git.json so API breakage in Nix master shows up here
   # before downstream flakes pull a newer nix. PRs carry the auto-merge label
   # and land via .github/workflows/auto-merge.yaml once CI is green.
   onSchedule.update-nix-git = {
     when = {
+      dayOfWeek = [ "Mon" ];
       hour = 4;
       minute = 17;
     };
