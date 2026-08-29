@@ -57,7 +57,9 @@ nix_store = dependency('nix-store', required: get_option('plugin'))
 nix_util = dependency('nix-util', required: get_option('plugin'))
 if nix_fetchers.found() and nix_store.found() and nix_util.found()
   nix_ver = nix_fetchers.version().split('.')
-  majmin = nix_ver[0] + '.' + nix_ver[1].split('pre')[0]
+  # Same rule Nix uses for its SONAME, so the loader can check whether the
+  # host already has exactly these libraries mapped.
+  nix_soversion = nix_store.version().split('+')[0].split('pre')[0]
   compat_args = [
     '-DNIX_COMPAT_VERSION_MAJOR=' + nix_ver[0],
     '-DNIX_COMPAT_VERSION_MINOR=' + nix_ver[1].split('pre')[0],
@@ -72,7 +74,7 @@ if nix_fetchers.found() and nix_store.found() and nix_util.found()
     name_prefix: '',
     name_suffix: module_suffix,
     install: true,
-    install_dir: get_option('libdir') / 'nix' / 'nix-tarmac-versions' / majmin)
+    install_dir: get_option('libdir') / 'nix' / 'nix-tarmac-versions' / nix_soversion)
 
   shared_module('nix-tarmac-loader', 'plugin/loader.cc',
     cpp_args: ['-DTARMAC_MODULE_SUFFIX="' + module_suffix + '"'],

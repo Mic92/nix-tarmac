@@ -125,7 +125,7 @@ or pass `--plugin-files` on the command line.
 ## Supported Nix versions
 
 Nix 2.34+. The plugin is built against all versions provided by the pinned nixpkgs of the flake.
-The plugin loader will match at runtime time a compatible version or skip with a warning.
+The loader picks the build whose libnixstore SONAME is already loaded in the process and otherwise skips with a warning.
 
 ## Development
 
