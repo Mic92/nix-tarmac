@@ -9,7 +9,7 @@
 lib.makeScope newScope (
   self:
   let
-    # nixpkgs' nixVersions.git lags behind master; track it closer so API
+    # nixpkgs' nixVersions.git lags behind master. Track it closer so API
     # breakage shows up here before downstream flakes pull a newer nix.
     # Bumped daily by the update-nix-git effect (effects.nix).
     nixGitPin = lib.importJSON ./nix-git.json;
