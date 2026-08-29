@@ -3,8 +3,8 @@
 // survives evaluator restarts, so store objects are written only once.
 // The store API churned before 2.35, older versions only get the
 // fetcher.
-#if NIX_COMPAT_VERSION_MAJOR > 2 ||                                            \
-    (NIX_COMPAT_VERSION_MAJOR == 2 && NIX_COMPAT_VERSION_MINOR >= 35)
+#include "nix_compat.hh"
+#if TARMAC_HAVE_STORE
 
 #include "ctx.hh"
 #include "pack_accessor.hh"
@@ -41,6 +41,10 @@
 #include <vector>
 
 namespace {
+
+using nix_compat::drvReferences;
+using nix_compat::parseDrv;
+using nix_compat::unparseDrv;
 
 constexpr std::string_view kPathPrefix = "sp:";
 constexpr std::string_view kDrvPrefix = "sd:";
@@ -312,12 +316,8 @@ struct TarmacStore : nix::Store {
     };
     // drv paths hash their references in, report them so a copy to
     // another store keeps the path
-    const auto drv = parseDerivation(*this, std::move(text),
-                                     nix::Derivation::nameFromPath(path));
-    info->references = drv.inputSrcs;
-    for (const auto &[inputDrv, node] : drv.inputDrvs.map) {
-      info->references.insert(inputDrv);
-    }
+    info->references = drvReferences(
+        parseDrv(*this, std::move(text), nix::Derivation::nameFromPath(path)));
     return info;
   }
 
@@ -416,9 +416,8 @@ struct TarmacStore : nix::Store {
     auto accessor =
         parseToMemory(source, nix::FileSerialisationMethod::NixArchive);
     if (info.path.isDerivation()) {
-      writeDerivation(parseDerivation(*this,
-                                      accessor->readFile(nix::CanonPath::root),
-                                      nix::Derivation::nameFromPath(info.path)),
+      writeDerivation(parseDrv(*this, accessor->readFile(nix::CanonPath::root),
+                               nix::Derivation::nameFromPath(info.path)),
                       nix::NoRepair);
     } else if (!pathRecord(info.path)) {
       storeObject(info, *accessor->root);
@@ -467,7 +466,7 @@ struct TarmacStore : nix::Store {
     auto drvPath = nix::computeStorePath(*this, drv);
     if (!drvText(drvPath)) {
       const std::scoped_lock lock(state->mutex);
-      const auto id = state->store.putBlob(drv.unparse(*this, false));
+      const auto id = state->store.putBlob(unparseDrv(*this, drv));
       state->store.registerRoot(id, false);
       metaPut(kDrvPrefix, drvPath, id);
       state->store.sync();
@@ -481,8 +480,8 @@ struct TarmacStore : nix::Store {
     if (!text) {
       throw nix::Error("derivation '%s' is not valid", printStorePath(drvPath));
     }
-    return parseDerivation(*this, std::move(*text),
-                           nix::Derivation::nameFromPath(drvPath));
+    return parseDrv(*this, std::move(*text),
+                    nix::Derivation::nameFromPath(drvPath));
   }
 
   auto readInvalidDerivation(const nix::StorePath &drvPath)
@@ -490,7 +489,8 @@ struct TarmacStore : nix::Store {
     return readDerivation(drvPath);
   }
 
-  void registerDrvOutput(const nix::Realisation & /*output*/) override {
+  void
+  TARMAC_REGISTER_DRV_OUTPUT(const nix::Realisation & /*output*/) override {
     unsupported("registerDrvOutput");
   }
 
