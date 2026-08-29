@@ -1,5 +1,28 @@
 {
   "nodes": {
+    "nixbot": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "treefmt-nix": "treefmt-nix"
+      },
+      "locked": {
+        "lastModified": 1787917367,
+        "narHash": "sha256-FCFmTnV7UQog1JWm0TvySlBnHBnyt+g6BlhUUFdE8SE=",
+        "ref": "main",
+        "rev": "660d7182cbabd2ca751d59d242c816d14038b0d1",
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/Mic92/nixbot"
+      },
+      "original": {
+        "ref": "main",
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/Mic92/nixbot"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1786963906,
@@ -18,7 +41,29 @@
     },
     "root": {
       "inputs": {
+        "nixbot": "nixbot",
         "nixpkgs": "nixpkgs"
+      }
+    },
+    "treefmt-nix": {
+      "inputs": {
+        "nixpkgs": [
+          "nixbot",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1780220602,
+        "narHash": "sha256-eynAfOmbmxJnkp7YewvCEbShNnnYJ9gLLqkzsYtBPeM=",
+        "owner": "numtide",
+        "repo": "treefmt-nix",
+        "rev": "db947814a175b7ca6ded66e21383d938df01c227",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "treefmt-nix",
+        "type": "github"
       }
     }
   },
