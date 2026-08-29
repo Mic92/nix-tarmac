@@ -3,6 +3,7 @@
 #ifndef NIX_TARMAC_PACK_ACCESSOR_HH
 #define NIX_TARMAC_PACK_ACCESSOR_HH
 
+#include "nix_compat.hh"
 #include "pack_cas.hpp"
 #include "tree.hpp"
 
@@ -38,10 +39,7 @@ public:
     fingerprint = "tarmac:" + to_hex(root_);
   }
 
-#if NIX_COMPAT_VERSION_MAJOR > 2 ||                                            \
-    (NIX_COMPAT_VERSION_MAJOR == 2 && NIX_COMPAT_VERSION_MINOR >= 35)
-  void anchor() override {}
-#endif
+  TARMAC_ANCHOR_OVERRIDE
 
   void readFile(const nix::CanonPath &path, nix::Sink &sink,
                 nix::fun<void(uint64_t)> sizeCallback) override {

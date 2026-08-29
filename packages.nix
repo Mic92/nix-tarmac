@@ -25,7 +25,7 @@ lib.makeScope newScope (
       ((nixVersions.nixComponents_git.overrideSource nixGitSrc).overrideScope (
         _final: _prev: { inherit (nixGitPin) version; }
       )).nix-everything;
-    libsFor = version: if version == "git" then nixGit.libs else nixVersions.${version}.libs;
+    nixFor = version: if version == "git" then nixGit else nixVersions.${version};
 
     supportedNixVersions = builtins.filter (
       name:
@@ -47,9 +47,15 @@ lib.makeScope newScope (
       map (
         version:
         lib.nameValuePair "plugin-${version}" (
-          self.callPackage ./package.nix {
-            inherit (libsFor version) nix-fetchers nix-store nix-util;
-          }
+          (self.callPackage ./package.nix {
+            inherit ((nixFor version).libs) nix-fetchers nix-store nix-util;
+          }).overrideAttrs
+            (old: {
+              # tests/e2e.sh runs the plugin under exactly this nix
+              passthru = (old.passthru or { }) // {
+                nix = nixFor version;
+              };
+            })
         )
       ) (supportedNixVersions ++ [ "git" ])
     );

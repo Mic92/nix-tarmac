@@ -24,7 +24,7 @@ url="file://$work/src.tar.gz"
 expr="(builtins.fetchTree { type = \"tarball\"; url = \"$url\"; }).narHash"
 
 for v in $versions; do
-  nixbin=$(nix build --no-link --print-out-paths "nixpkgs#nixVersions.$v.out")/bin/nix
+  nixbin=$(nix build --no-link --print-out-paths "$repo#plugin-$v.nix.out")/bin/nix
   plugin=$(nix build --no-link --print-out-paths "$repo#plugin-$v")/lib/nix/plugins
   common=(--extra-experimental-features 'nix-command flakes' --impure --raw)
 
@@ -75,41 +75,45 @@ echo "OK degrade: builtin fallback on nix_2_31"
 
 # eval store: drvs land in the pack CAS, building copies them out to
 # the real store on demand
-nixbin=$(nix build --no-link --print-out-paths "nixpkgs#nixVersions.nix_2_35.out")/bin/nix
-plugin=$(nix build --no-link --print-out-paths "$repo#plugin-nix_2_35")/lib/nix/plugins
-export XDG_CACHE_HOME="$work/cache-evalstore"
-evalstore="tarmac://$work/evalstore"
-# a fresh salt keeps the drv out of /nix/store from earlier runs
-buildexpr="derivation {
-  name = \"tarmac-e2e-$RANDOM$RANDOM\";
-  system = builtins.currentSystem;
-  builder = \"/bin/sh\";
-  args = [ \"-c\" \"echo ok > \$out\" ];
-  note = builtins.toFile \"note.txt\" \"hello\";
-}"
-common=(--extra-experimental-features 'nix-command flakes' --impure
-  --plugin-files "$plugin" --eval-store "$evalstore")
+for v in $versions; do
+  # TarmacStore needs the >= 2.35 Store API
+  case $v in nix_2_3[0-4]) continue ;; esac
+  nixbin=$(nix build --no-link --print-out-paths "$repo#plugin-$v.nix.out")/bin/nix
+  plugin=$(nix build --no-link --print-out-paths "$repo#plugin-$v")/lib/nix/plugins
+  export XDG_CACHE_HOME="$work/cache-evalstore-$v"
+  evalstore="tarmac://$work/evalstore-$v"
+  # a fresh salt keeps the drv out of /nix/store from earlier runs
+  buildexpr="derivation {
+    name = \"tarmac-e2e-$RANDOM$RANDOM\";
+    system = builtins.currentSystem;
+    builder = \"/bin/sh\";
+    args = [ \"-c\" \"echo ok > \$out\" ];
+    note = builtins.toFile \"note.txt\" \"hello\";
+  }"
+  common=(--extra-experimental-features 'nix-command flakes' --impure
+    --plugin-files "$plugin" --eval-store "$evalstore")
 
-drv=$("$nixbin" eval "${common[@]}" --raw --expr "($buildexpr).drvPath")
-[[ -e $work/evalstore/pack.0 ]] || {
-  echo "FAIL evalstore: store not populated" >&2
-  exit 1
-}
-[[ -e $drv ]] && {
-  echo "FAIL evalstore: drv leaked into /nix/store" >&2
-  exit 1
-}
-# hash-part lookup must find the drv in the meta table
-found=$("$nixbin" store path-from-hash-part \
-  --extra-experimental-features 'nix-command flakes' \
-  --plugin-files "$plugin" --store "$evalstore" "${drv:11:32}")
-[[ $found == "$drv" ]] || {
-  echo "FAIL evalstore: queryPathFromHashPart" >&2
-  exit 1
-}
-out=$("$nixbin" build "${common[@]}" --no-link --print-out-paths --expr "$buildexpr")
-[[ $(cat "$out") == ok ]] || {
-  echo "FAIL evalstore: build output mismatch" >&2
-  exit 1
-}
-echo "OK evalstore: eval + build via $evalstore"
+  drv=$("$nixbin" eval "${common[@]}" --raw --expr "($buildexpr).drvPath")
+  [[ -e $work/evalstore-$v/pack.0 ]] || {
+    echo "FAIL evalstore $v: store not populated" >&2
+    exit 1
+  }
+  [[ -e $drv ]] && {
+    echo "FAIL evalstore $v: drv leaked into /nix/store" >&2
+    exit 1
+  }
+  # hash-part lookup must find the drv in the meta table
+  found=$("$nixbin" store path-from-hash-part \
+    --extra-experimental-features 'nix-command flakes' \
+    --plugin-files "$plugin" --store "$evalstore" "${drv:11:32}")
+  [[ $found == "$drv" ]] || {
+    echo "FAIL evalstore $v: queryPathFromHashPart" >&2
+    exit 1
+  }
+  out=$("$nixbin" build "${common[@]}" --no-link --print-out-paths --expr "$buildexpr")
+  [[ $(cat "$out") == ok ]] || {
+    echo "FAIL evalstore $v: build output mismatch" >&2
+    exit 1
+  }
+  echo "OK evalstore $v: eval + build via $evalstore"
+done
