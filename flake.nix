@@ -2,15 +2,9 @@
   description = "Fast tarball fetcher cache plugin for Nix";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-  inputs.nixbot.url = "git+https://github.com/Mic92/nixbot?shallow=1&ref=main";
-  inputs.nixbot.inputs.nixpkgs.follows = "nixpkgs";
 
   outputs =
-    {
-      self,
-      nixpkgs,
-      nixbot,
-    }:
+    { self, nixpkgs }:
     let
       systems = [
         "x86_64-linux"
@@ -59,7 +53,7 @@
         // scope.versionPlugins
       );
 
-      herculesCI = import ./effects.nix { inherit nixpkgs nixbot; };
+      herculesCI = import ./effects.nix { inherit nixpkgs; };
 
       nixosModules.default = tarmacModule;
       darwinModules.default = tarmacModule;
