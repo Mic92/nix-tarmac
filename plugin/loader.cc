@@ -53,8 +53,8 @@ auto versions_dir() -> std::filesystem::path {
 
 auto plugin_for_running_nix() -> std::filesystem::path {
   const auto dir = versions_dir();
-  std::error_code ec;
-  for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
+  std::error_code ignored;
+  for (const auto &entry : std::filesystem::directory_iterator(dir, ignored)) {
     if (host_has(nix_store_soname(entry.path().filename().string()))) {
       return entry.path() / ("nix-tarmac." TARMAC_MODULE_SUFFIX);
     }
