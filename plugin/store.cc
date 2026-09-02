@@ -11,8 +11,12 @@
 #include "pack_cas.hpp"
 #include "tree.hpp"
 
+#include <mutex>
+
 #include <nix/store/content-address.hh>
 #include <nix/store/derivations.hh>
+#include <nix/store/globals.hh>
+#include <nix/store/keys.hh>
 #include <nix/store/path-info.hh>
 #include <nix/store/store-api.hh>
 #include <nix/store/store-registration.hh>
@@ -201,6 +205,11 @@ struct TarmacStoreConfig : std::enable_shared_from_this<TarmacStoreConfig>,
                            virtual nix::StoreConfig {
   std::string dir;
 
+  nix::Setting<bool> requireSigs{
+      this, nix::settings.requireSigs, "require-sigs",
+      "Whether store paths copied into this store should have a trusted "
+      "signature."};
+
   explicit TarmacStoreConfig(const Params &params)
       : StoreConfig(params, nix::StoreConfig::FilePathType::Unix),
         dir(Ctx::defaultDir()) {
@@ -246,11 +255,19 @@ struct TarmacStore : nix::Store {
 
   nix::ref<const Config> config;
   std::shared_ptr<Ctx> state;
+  std::once_flag publicKeysOnce;
+  nix::PublicKeys publicKeysCache;
 
   explicit TarmacStore(nix::ref<const Config> conf)
       : Store{*conf}, config(conf), state(Ctx::get(conf->dir)) {}
 
   void anchor() override {}
+
+  auto publicKeys() -> const nix::PublicKeys & {
+    std::call_once(publicKeysOnce,
+                   [this] { publicKeysCache = nix::getDefaultPublicKeys(); });
+    return publicKeysCache;
+  }
 
   auto metaKey(std::string_view prefix, const nix::StorePath &path)
       -> std::string {
@@ -363,6 +380,12 @@ struct TarmacStore : nix::Store {
 
   auto isTrustedClient() -> std::optional<nix::TrustedFlag> override {
     return nix::Trusted;
+  }
+
+  // the base Store calls every substitute untrusted, which leaves an
+  // --eval-store no way to fill itself
+  auto pathInfoIsUntrusted(const nix::ValidPathInfo &info) -> bool override {
+    return config->requireSigs && !info.checkSignatures(*this, publicKeys());
   }
 
   auto queryPathFromHashPart(const std::string &hashPart)
