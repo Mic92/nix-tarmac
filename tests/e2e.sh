@@ -19,7 +19,11 @@ mkdir -p "$work/src/sub"
 echo hello >"$work/src/file.txt"
 echo world >"$work/src/sub/nested.txt"
 ln -s file.txt "$work/src/link"
-tar -C "$work" -czf "$work/src.tar.gz" src
+ln "$work/src/file.txt" "$work/src/hardlink"
+tar -C "$work" -cf "$work/src.tar" src/file.txt src
+echo replaced >"$work/src/sub/nested.txt"
+tar -C "$work" -rf "$work/src.tar" src/sub/nested.txt
+gzip "$work/src.tar"
 url="file://$work/src.tar.gz"
 expr="(builtins.fetchTree { type = \"tarball\"; url = \"$url\"; }).narHash"
 

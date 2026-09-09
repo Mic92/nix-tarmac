@@ -40,7 +40,8 @@ core_dep = declare_dependency(link_with: core, include_directories: 'src',
 
 executable('bench', 'bench/bench.cpp', dependencies: core_dep)
 
-foreach t : ['model_test', 'corrupt_test', 'nar_test', 'crash_test', 'gc_test']
+foreach t : ['model_test', 'corrupt_test', 'nar_test', 'crash_test', 'gc_test',
+             'tar_semantics_test']
   test(t, executable(t, 'tests' / t + '.cpp', dependencies: core_dep),
     timeout: 300)
 endforeach
