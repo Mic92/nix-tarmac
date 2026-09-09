@@ -91,44 +91,78 @@ auto from_hex(std::string_view hex) -> std::string {
 
 namespace {
 
-struct MemDir {
-  std::map<std::string, MemDir> dirs;
-  std::map<std::string, TreeEntry> leaves;
+struct MemNode {
+  char type = 'd';
+  std::string id;
+  std::map<std::string, MemNode, std::less<>> children;
 };
 
 // consumes the tree; children are flushed before their parent by walking
 // a pre-order listing backwards
-auto flush_tree(TreeStore &store, MemDir &root) -> std::string {
-  struct Pending {
-    MemDir *dir;
-    MemDir *parent;
-    std::string name;
-  };
-  std::vector<Pending> order;
-  order.push_back({&root, nullptr, ""});
+auto flush_tree(TreeStore &store, MemNode &root) -> std::string {
+  std::vector<MemNode *> order{&root};
   for (size_t pos = 0; pos < order.size(); pos++) {
-    MemDir *dir = order[pos].dir;
-    for (auto &[name, sub] : dir->dirs) {
-      order.push_back({&sub, dir, name});
+    for (auto &[name, sub] : order[pos]->children) {
+      if (sub.type == 'd') {
+        order.push_back(&sub);
+      }
     }
   }
-  std::string root_id;
-  for (auto &pending : std::views::reverse(order)) {
+  for (MemNode *dir : std::views::reverse(order)) {
     std::vector<TreeEntry> entries;
-    entries.reserve(pending.dir->leaves.size());
-    for (auto &[name, leaf] : pending.dir->leaves) {
-      entries.push_back(std::move(leaf));
+    entries.reserve(dir->children.size());
+    for (auto &[name, sub] : dir->children) {
+      entries.push_back({name, sub.type, std::move(sub.id)});
     }
-    std::ranges::sort(entries, {}, &TreeEntry::name);
-    std::string tree_id = store.putTree(entries);
-    if (pending.parent == nullptr) {
-      root_id = std::move(tree_id);
-    } else {
-      pending.parent->leaves[pending.name] = {pending.name, 'd',
-                                              std::move(tree_id)};
+    dir->id = store.putTree(entries);
+    dir->children.clear();
+  }
+  return std::move(root.id);
+}
+
+auto lookup_node(const MemNode &root,
+                 const std::vector<std::string_view> &comps)
+    -> const MemNode * {
+  const MemNode *cur = &root;
+  for (const auto comp : comps) {
+    if (cur->type != 'd') {
+      return nullptr;
+    }
+    auto found = cur->children.find(comp);
+    if (found == cur->children.end()) {
+      return nullptr;
+    }
+    cur = &found->second;
+  }
+  return cur;
+}
+
+// overwrite rules match Nix's merkle-tar-adapter
+void add_node(MemNode &root, const std::vector<std::string_view> &comps,
+              const std::string &path, MemNode &&node) {
+  MemNode *cur = &root;
+  for (size_t idx = 0; idx < comps.size(); idx++) {
+    if (cur->type != 'd') {
+      throw std::runtime_error("parent of '" + path + "' is not a directory");
+    }
+    const bool last = idx + 1 == comps.size();
+    auto [slot, inserted] = cur->children.try_emplace(std::string(comps[idx]));
+    cur = &slot->second;
+    if (last && inserted) {
+      *cur = std::move(node);
+      return;
     }
   }
-  return root_id;
+  if (cur->type == 'd') {
+    if (node.type == 'd') {
+      return;
+    }
+    if (!cur->children.empty() || cur == &root) {
+      throw std::runtime_error("cannot create '" + path +
+                               "', conflicting non-empty directory");
+    }
+  }
+  *cur = std::move(node);
 }
 
 struct TarItem {
@@ -220,18 +254,19 @@ void read_regular(archive *arc, archive_entry *header, ReadBuf &buf,
   }
 }
 
-auto read_item(archive *arc, archive_entry *header, ReadBuf &buf)
-    -> std::optional<TarItem> {
-  const auto type = archive_entry_filetype(header);
-  if (type != AE_IFREG && type != AE_IFLNK && type != AE_IFDIR) {
-    return std::nullopt;
-  }
+auto read_item(archive *arc, archive_entry *header, ReadBuf &buf) -> TarItem {
   const char *name = archive_entry_pathname(header);
   if (name == nullptr) {
     throw std::runtime_error("archive entry without name");
   }
   TarItem item;
   item.path = name;
+  if (const char *target = archive_entry_hardlink(header)) {
+    item.type = 'h';
+    item.data = target;
+    return item;
+  }
+  const auto type = archive_entry_filetype(header);
   if (type == AE_IFDIR) {
     item.type = 'd';
   } else if (type == AE_IFLNK) {
@@ -241,8 +276,11 @@ auto read_item(archive *arc, archive_entry *header, ReadBuf &buf)
     }
     item.type = 's';
     item.data = target;
-  } else {
+  } else if (type == AE_IFREG) {
     read_regular(arc, header, buf, item);
+  } else {
+    throw std::runtime_error("file '" + item.path +
+                             "' in tarball has unsupported file type");
   }
   return item;
 }
@@ -252,21 +290,13 @@ void read_items(archive *arc, ItemQueue &queue) {
   auto buf = std::make_unique<ReadBuf>();
   int res = 0;
   while ((res = archive_read_next_header(arc, &header)) == ARCHIVE_OK) {
-    if (auto item = read_item(arc, header, *buf)) {
-      queue.push(std::move(*item));
-    }
+    queue.push(read_item(arc, header, *buf));
   }
   if (res != ARCHIVE_EOF) {
     throw std::runtime_error("archive error: " + archive_err(arc));
   }
 }
 
-// reject entries that escape the root or nest absurdly deep
-auto safe_component(std::string_view comp) -> bool {
-  return comp != ".." && comp.size() <= kMaxNameLen && !comp.contains('\0');
-}
-
-// "./a//b/" -> {"a", "b"}; nullopt for unsafe or too deep paths
 auto split_path(std::string_view path)
     -> std::optional<std::vector<std::string_view>> {
   std::vector<std::string_view> comps;
@@ -277,12 +307,43 @@ auto split_path(std::string_view path)
     if (comp.empty() || comp == ".") {
       continue;
     }
-    if (!safe_component(comp) || comps.size() >= kMaxTreeDepth) {
+    if (comp == "..") {
+      if (!comps.empty()) {
+        comps.pop_back();
+      }
+      continue;
+    }
+    if (comp.size() > kMaxNameLen || comps.size() >= kMaxTreeDepth) {
       return std::nullopt;
     }
     comps.push_back(comp);
   }
   return comps;
+}
+
+void apply_item(TreeStore &store, MemNode &root, TarItem &item,
+                IngestResult &res) {
+  const auto comps = split_path(item.path);
+  if (!comps) {
+    throw std::runtime_error("path '" + item.path + "' too long");
+  }
+  if (item.type == 'h') {
+    const auto target = split_path(item.data);
+    const MemNode *node = target ? lookup_node(root, *target) : nullptr;
+    if (node == nullptr || node->type == 'd') {
+      throw std::runtime_error("hard link from '" + item.path + "' to '" +
+                               item.data +
+                               (node == nullptr ? "': target does not exist"
+                                                : "': target is a directory"));
+    }
+    add_node(root, *comps, item.path, {node->type, node->id, {}});
+  } else if (item.type == 'd') {
+    add_node(root, *comps, item.path, {});
+  } else {
+    add_node(root, *comps, item.path,
+             {item.type, store.putBlob(item.data), {}});
+    res.files++;
+  }
 }
 
 } // namespace
@@ -370,27 +431,11 @@ auto ingest_archive(TreeStore &store, archive *arc) -> IngestResult {
   });
 
   IngestResult res;
-  MemDir root;
+  MemNode root;
   TarItem item;
   try {
     while (queue.pop(item)) {
-      auto comps = split_path(item.path);
-      if (!comps || comps->empty()) {
-        continue; // hostile or root entry: skip
-      }
-      std::string leaf(comps->back());
-      comps->pop_back();
-      MemDir *dir = &root;
-      for (const auto comp : *comps) {
-        dir = &dir->dirs[std::string(comp)];
-      }
-      if (item.type == 'd') {
-        dir->dirs[std::move(leaf)];
-      } else {
-        auto &slot = dir->leaves[leaf];
-        slot = {std::move(leaf), item.type, store.putBlob(item.data)};
-        res.files++;
-      }
+      apply_item(store, root, item, res);
     }
   } catch (...) {
     queue.close(); // unblock the producer so jthread can join
