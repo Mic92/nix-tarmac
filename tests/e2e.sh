@@ -59,6 +59,59 @@ for v in $versions; do
   echo "OK $v: $builtin_hash"
 done
 
+# lockable tarball protocol (#19): a `Link: <...>; rel="immutable"` header
+# on the redirect must end up in the lock instead of the moving URL
+immut_dir=$work/immutable
+mkdir -p "$immut_dir/releases/1234"
+cp "$work/src.tar.gz" "$immut_dir/releases/1234/src.tar.gz"
+cat >"$immut_dir/server.py" <<'EOF'
+import http.server, sys
+
+class H(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/channel/src.tar.gz":
+            port = self.server.server_address[1]
+            target = f"http://127.0.0.1:{port}/releases/1234/src.tar.gz"
+            self.send_response(302)
+            self.send_header("Location", target)
+            self.send_header(
+                "Link", f'<{target}?rev=0123456789abcdef0123456789abcdef01234567&lastModified=1700000000>; rel="immutable"'
+            )
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        super().do_GET()
+
+    def log_message(self, *args):
+        pass
+
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+print(srv.server_address[1], flush=True)
+srv.serve_forever()
+EOF
+coproc SERVER { cd "$immut_dir" && exec python3 server.py; }
+read -r port <&"${SERVER[0]}"
+trap 'kill $SERVER_PID 2>/dev/null; rm -rf "$work"' EXIT
+channel_url="http://127.0.0.1:$port/channel/src.tar.gz"
+
+for v in $versions; do
+  nixbin=$(nix build --no-link --print-out-paths "$repo#plugin-$v.nix.out")/bin/nix
+  plugin=$(nix build --no-link --print-out-paths "$repo#plugin-$v")/lib/nix/plugins
+  common=(--extra-experimental-features 'nix-command flakes' --json)
+
+  export XDG_CACHE_HOME="$work/cache-immut-builtin-$v"
+  builtin_lock=$("$nixbin" flake prefetch "${common[@]}" "$channel_url" | jq -cS .locked)
+  for run in cold warm; do
+    export XDG_CACHE_HOME="$work/cache-immut-plugin-$v"
+    plugin_lock=$("$nixbin" flake prefetch "${common[@]}" --plugin-files "$plugin" "$channel_url" | jq -cS .locked)
+    [[ $builtin_lock == "$plugin_lock" ]] || {
+      echo "FAIL immutable $v ($run): builtin=$builtin_lock plugin=$plugin_lock" >&2
+      exit 1
+    }
+  done
+  echo "OK immutable $v: $plugin_lock"
+done
+
 # unsupported Nix: the dispatcher must fall back to the builtin fetcher
 nixbin=$(nix build --no-link --print-out-paths "nixpkgs#nixVersions.nix_2_31.out")/bin/nix
 plugin=$(nix build --no-link --print-out-paths "$repo#plugin-dispatcher")/lib/nix/plugins

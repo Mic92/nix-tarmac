@@ -168,9 +168,18 @@ struct FastTarballInputScheme : nix::fetchers::InputScheme {
     auto url = orig_url;
     url.scheme = std::string(scheme.transport);
     Input input{};
-    for (const auto *attr : {"narHash", "rev", "revCount", "lastModified"}) {
+    for (const auto *attr : {"narHash", "rev"}) {
       if (const auto *value = nix::get(url.query, attr)) {
         input.attrs.insert_or_assign(attr, *value);
+        url.query.erase(attr);
+      }
+    }
+    // integers, or lock files differ from the builtin scheme's
+    for (const auto *attr : {"revCount", "lastModified"}) {
+      if (const auto *value = nix::get(url.query, attr)) {
+        if (auto n = nix::string2Int<uint64_t>(*value)) {
+          input.attrs.insert_or_assign(attr, *n);
+        }
         url.query.erase(attr);
       }
     }
@@ -245,6 +254,26 @@ struct FastTarballInputScheme : nix::fetchers::InputScheme {
       settings.getCache()->upsert(key, info);
     }
 
+    // lockable tarball protocol: lock the immutable URL from the Link
+    // header, not the moving one the user wrote
+    if (const auto immutableUrl =
+            nix::fetchers::maybeGetStrAttr(info, "immutableUrl")) {
+      // via Input::fromURL so the input gets its scheme pointer;
+      // Nix 2.36 dropped the Settings parameter
+      auto immutable = [](const auto &s, const auto &url) {
+        if constexpr (requires { Input::fromURL(s, url, false); }) {
+          return Input::fromURL(s, url, false);
+        } else {
+          return Input::fromURL(url, false);
+        }
+      }(settings, *immutableUrl);
+      if (immutable.getType() != schemeName()) {
+        throw nix::Error("tarball 'Link' headers that redirect to non-tarball "
+                         "URLs are not supported");
+      }
+      input = std::move(immutable);
+    }
+
     input.attrs.insert_or_assign("narHash",
                                  nix::fetchers::getStrAttr(info, "narHash"));
 
@@ -300,11 +329,15 @@ private:
                                     nix::ContentAddressMethod::Raw::NixArchive,
                                     nix::CanonPath::root),
                                 {{"hash", narHashSri}});
-    return {
+    Attrs info{
         {"etag", result->etag},
         {"root", to_hex(ingest.root)},
         {"narHash", narHashSri},
     };
+    if (result->immutableUrl) {
+      info.insert_or_assign("immutableUrl", *result->immutableUrl);
+    }
+    return info;
   }
 };
 
