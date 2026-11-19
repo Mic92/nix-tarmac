@@ -112,8 +112,12 @@ for v in $versions; do
   echo "OK immutable $v: $plugin_lock"
 done
 
-# unsupported Nix: the dispatcher must fall back to the builtin fetcher
-nixbin=$(nix build --no-link --print-out-paths "nixpkgs#nixVersions.nix_2_31.out")/bin/nix
+# unsupported Nix: the dispatcher must fall back to the builtin fetcher.
+# Take it from the locked nixpkgs, not the registry's, which drops old
+# versions; getFlake rather than --inputs-from, which opens the eval
+# store before plugins load and so fails with eval-store = tarmac://
+nixbin=$(nix build --no-link --print-out-paths --impure --expr \
+  "(builtins.getFlake \"$repo\").inputs.nixpkgs.legacyPackages.$system.nixVersions.nix_2_31.out")/bin/nix
 plugin=$(nix build --no-link --print-out-paths "$repo#plugin-dispatcher")/lib/nix/plugins
 export XDG_CACHE_HOME="$work/cache-degrade"
 ref_hash=$("$nixbin" eval --extra-experimental-features 'nix-command flakes' \
