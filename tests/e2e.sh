@@ -172,5 +172,24 @@ for v in $versions; do
     echo "FAIL evalstore $v: build output mismatch" >&2
     exit 1
   }
+  # queryValidPaths: a copy brings in only what the eval store lacks
+  copy=$("$nixbin" copy "${common[@]}" --to "$evalstore" "$drv" "$out" 2>&1) &&
+    [[ $copy == *"copying 1 paths"* ]] || {
+    echo "FAIL evalstore $v: queryValidPaths: $copy" >&2
+    exit 1
+  }
+  # a GC that collected every blob, simulated by copying the records
+  # alone: the .drv is invalid like a missing one, and its record dropped
+  mdb=$(nix build --no-link --print-out-paths nixpkgs#lmdb.bin)/bin
+  mkdir -p "$work/collected-$v/index"
+  "$mdb/mdb_dump" -s meta "$work/evalstore-$v/index" | "$mdb/mdb_load" -s meta "$work/collected-$v/index"
+  collected=(--plugin-files "$plugin" --store "tarmac://$work/collected-$v")
+  invalid=$("$nixbin-store" "${collected[@]}" --check-validity --print-invalid "$drv" "${drv%.drv}-x.drv")
+  [[ $invalid == "$drv"$'\n'"${drv%.drv}-x.drv" &&
+    $("$nixbin" store path-from-hash-part --extra-experimental-features nix-command \
+      "${collected[@]}" "${drv:11:32}" 2>&1) == *"no store path"* ]] || {
+    echo "FAIL evalstore $v: collected: $invalid" >&2
+    exit 1
+  }
   echo "OK evalstore $v: eval + build via $evalstore"
 done

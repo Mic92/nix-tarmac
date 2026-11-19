@@ -305,17 +305,27 @@ struct TarmacStore : nix::Store {
     return rec;
   }
 
-  auto drvText(const nix::StorePath &path) -> std::optional<std::string> {
+  // the blob that the .drv's sd: record names; GC may have collected it,
+  // drop the record then
+  auto drvBlob(const nix::StorePath &path) -> std::optional<std::string> {
     auto id = metaGet(kDrvPrefix, path);
     if (!id) {
       return std::nullopt;
     }
-    std::string text;
-    if (!state->store.cas().get(*id, text)) {
+    if (!state->store.cas().has(*id)) {
       state->store.cas().meta_del(metaKey(kDrvPrefix, path));
       return std::nullopt;
     }
     state->store.touchRoot(*id, false);
+    return id;
+  }
+
+  auto drvText(const nix::StorePath &path) -> std::optional<std::string> {
+    auto id = drvBlob(path);
+    std::string text;
+    if (!id || !state->store.cas().get(*id, text)) {
+      return std::nullopt;
+    }
     return text;
   }
 
@@ -374,8 +384,22 @@ struct TarmacStore : nix::Store {
   }
 
   auto isValidPathUncached(const nix::StorePath &path) -> bool override {
-    return path.isDerivation() ? drvText(path).has_value()
+    return path.isDerivation() ? drvBlob(path).has_value()
                                : pathRecord(path).has_value();
+  }
+
+  // the base runs queryPathInfo per path on a thread pool, which reads,
+  // hashes and parses every .drv
+  auto queryValidPaths(const nix::StorePathSet &paths,
+                       nix::SubstituteFlag /*maybeSubstitute*/)
+      -> nix::StorePathSet override {
+    nix::StorePathSet valid;
+    for (const auto &path : paths) {
+      if (isValidPath(path)) {
+        valid.insert(path);
+      }
+    }
+    return valid;
   }
 
   auto isTrustedClient() -> std::optional<nix::TrustedFlag> override {
