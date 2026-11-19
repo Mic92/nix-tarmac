@@ -10,7 +10,6 @@
 #include <chrono>
 #include <cstdio>
 #include <string>
-#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -44,6 +43,19 @@ std::string make_tar(unsigned id) {
   return buf;
 }
 
+// a root stamp two hours old, big-endian nanoseconds like the store's
+std::string old_stamp() {
+  auto t = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          (std::chrono::system_clock::now() - std::chrono::hours(2))
+              .time_since_epoch())
+          .count());
+  std::string stamp(8, '\0');
+  for (int i = 7; i >= 0; i--, t >>= 8)
+    stamp[i] = static_cast<char>(t & 0xff);
+  return stamp;
+}
+
 IngestResult ingest(TreeStore &store, unsigned id) {
   std::string tar = make_tar(id);
   archive *a = archive_read_new();
@@ -57,7 +69,7 @@ IngestResult ingest(TreeStore &store, unsigned id) {
 int main(int argc, char **argv) {
   std::string dir = argc > 1 ? argv[1] : make_test_dir("packcas-gc-test");
 
-  constexpr auto kTtl = std::chrono::milliseconds(200);
+  constexpr auto kTtl = std::chrono::hours(1);
   constexpr auto kNoDelay = std::chrono::nanoseconds(0);
   TreeStore store(PackCas::open(dir), kTtl, kNoDelay, kNoDelay);
 
@@ -75,8 +87,17 @@ int main(int argc, char **argv) {
     roots.push_back(ingest(store, id));
   uint64_t size_before = store.cas().pack_size();
 
-  // age everything past the TTL, keep tarball 0 alive
-  usleep(300'000);
+  // age every root past the TTL rather than sleep through it: a sleep
+  // leaves the touched roots a race against the syncs in between
+  std::vector<std::string> keys;
+  for (const char *prefix : {"R", "B"})
+    store.cas().meta_scan(prefix, [&](std::string_view key, std::string_view) {
+      keys.emplace_back(key);
+      return true;
+    });
+  for (const auto &key : keys)
+    store.cas().meta_put(key, old_stamp());
+  // keep tarball 0 alive
   store.touchRoot(first.root);
   store.touchRoot(warm_blob, false);
   auto last = ingest(store, 6);
