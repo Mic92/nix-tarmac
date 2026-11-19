@@ -574,8 +574,11 @@ auto PackCas::open_once(const std::string &dir) -> std::unique_ptr<PackCas> {
   mdb_check(mdb_env_create(&impl->env), "env_create");
   mdb_check(mdb_env_set_mapsize(impl->env, kIndexMapSize), "set_mapsize");
   mdb_check(mdb_env_set_maxdbs(impl->env, kNumDbs), "set_maxdbs");
+  // NOMETASYNC: a commit flushes its pages before the meta page that
+  // points at them, so a system crash may undo at most the last commit
+  // but cannot tear the index; NOSYNC with WRITEMAP can (lmdb.h)
   mdb_check(mdb_env_open(impl->env, idx_dir.c_str(),
-                         MDB_NOSYNC | MDB_WRITEMAP | MDB_NOTLS, kFileMode),
+                         MDB_NOMETASYNC | MDB_WRITEMAP | MDB_NOTLS, kFileMode),
             "env_open");
   MDB_txn *txn = nullptr;
   mdb_check(mdb_txn_begin(impl->env, nullptr, 0, &txn), "txn_begin");

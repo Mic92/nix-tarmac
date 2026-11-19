@@ -16,6 +16,20 @@
 #include <string>
 #include <vector>
 
+#ifdef __linux__
+#include <sys/mman.h>
+#include <sys/syscall.h>
+
+// interposes liblmdb's msync to count synchronous index flushes
+static unsigned msyncs = 0;
+extern "C" __attribute__((visibility("default"))) int
+msync(void *addr, size_t len, int flags) {
+  if ((flags & MS_SYNC) != 0)
+    msyncs++;
+  return static_cast<int>(syscall(SYS_msync, addr, len, flags));
+}
+#endif
+
 namespace {
 
 int data_sync(int fd) {
@@ -117,11 +131,28 @@ void crash_recovery(const std::string &dir) {
   printf("crash recovery: %zu synced hashes survived 20 kills\n", n);
 }
 
+// a commit outside a batch flushes the index too, and a batch's sync()
+// flushes its pages before and its meta page after the commit
+void ordered_commits([[maybe_unused]] const std::string &dir) {
+#ifdef __linux__
+  auto cas = PackCas::open(dir);
+  unsigned before = msyncs;
+  cas->meta_put("k", "v");
+  assert(msyncs > before);
+  (void) cas->put("ordered");
+  before = msyncs;
+  cas->sync();
+  assert(msyncs >= before + 2);
+  printf("ordered commits ok\n");
+#endif
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
   std::string dir = argc > 1 ? argv[1] : make_test_dir("packcas-crash-test");
   concurrent_writers(dir);
   crash_recovery(dir);
+  ordered_commits(dir + "/ordered");
   return 0;
 }
