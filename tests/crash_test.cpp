@@ -5,6 +5,7 @@
 #include "tree.hpp"
 
 #include <fcntl.h>
+#include <lmdb.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -119,9 +120,67 @@ void crash_recovery(const std::string &dir) {
 
 } // namespace
 
+// A process killed inside a read txn leaves its reader slot, and LMDB
+// reuses no page freed after that snapshot: a cache with one such slot
+// filled its 32 GiB index map with 26.7 GiB of free pages it could not
+// reuse (MDB_MAP_FULL). After such a death, 5,000 writes must keep the
+// index's high-water page low: record writes (their own write txns) and
+// batches, each with its own dead reader.
+template <typename Each>
+size_t pages_after_dead_reader(const std::string &dir, Each each) {
+  const std::string index = dir + "/index";
+  auto cas = PackCas::open(dir);
+  int ready[2];
+  assert(pipe(ready) == 0);
+  const pid_t pid = fork();
+  assert(pid >= 0);
+  if (pid == 0) {
+    MDB_env *env = nullptr;
+    MDB_txn *txn = nullptr;
+    if (mdb_env_create(&env) != 0 ||
+        mdb_env_open(env, index.c_str(), MDB_RDONLY, 0644) != 0 ||
+        mdb_txn_begin(env, nullptr, MDB_RDONLY, &txn) != 0)
+      _exit(1);
+    assert(write(ready[1], "x", 1) == 1);
+    pause();
+  }
+  close(ready[1]); // a child that fails closes the pipe: the read fails
+  char token = 0;
+  assert(read(ready[0], &token, 1) == 1);
+  kill(pid, SIGKILL);
+  assert(waitpid(pid, nullptr, 0) == pid);
+  for (unsigned i = 0; i < 5000; i++)
+    each(*cas, std::to_string(i));
+  cas.reset(); // LMDB opens an environment once per process
+  MDB_env *env = nullptr;
+  MDB_envinfo info;
+  assert(mdb_env_create(&env) == 0 &&
+         mdb_env_open(env, index.c_str(), MDB_RDONLY | MDB_NOLOCK, 0644) == 0 &&
+         mdb_env_info(env, &info) == 0);
+  mdb_env_close(env);
+  return info.me_last_pgno + 1;
+}
+
+void dead_reader_cleared(const std::string &root) {
+  const size_t records = pages_after_dead_reader(
+      root + "/dead-reader-records",
+      [](PackCas &cas, const std::string &i) { cas.meta_put("k", i); });
+  const size_t batches = pages_after_dead_reader(
+      root + "/dead-reader-batches", [](PackCas &cas, const std::string &i) {
+        (void)cas.put(i);
+        cas.sync();
+      });
+  printf("dead reader: index high-water %zu pages after records, %zu after "
+         "batches\n", records, batches);
+  fflush(stdout);
+  assert(records < 1024);
+  assert(batches < 1024);
+}
+
 int main(int argc, char **argv) {
   std::string dir = argc > 1 ? argv[1] : make_test_dir("packcas-crash-test");
   concurrent_writers(dir);
   crash_recovery(dir);
+  dead_reader_cleared(dir);
   return 0;
 }

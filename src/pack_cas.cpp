@@ -77,6 +77,14 @@ void mdb_check(int res, const char *what) {
   }
 }
 
+// A process killed inside a read txn leaves its reader slot, and LMDB
+// reuses no page freed after that reader's snapshot, so the index grows
+// until MDB_MAP_FULL. Each write txn first clears dead readers' slots.
+void begin_write(MDB_env *env, MDB_txn **txn) {
+  mdb_check(mdb_reader_check(env, nullptr), "reader_check");
+  mdb_check(mdb_txn_begin(env, nullptr, 0, txn), "txn_begin");
+}
+
 struct IndexEntry {
   uint64_t off;
   uint64_t len;
@@ -141,7 +149,7 @@ class WriteTxn {
 public:
   WriteTxn(MDB_env *env, MDB_txn *wtxn) : owned_(wtxn == nullptr), txn_(wtxn) {
     if (owned_) {
-      mdb_check(mdb_txn_begin(env, nullptr, 0, &txn_), "txn_begin");
+      begin_write(env, &txn_);
     }
   }
   ~WriteTxn() {
@@ -426,7 +434,7 @@ struct PackCas::Impl {
   void begin_batch() {
     lock_writer();
     try {
-      mdb_check(mdb_txn_begin(env, nullptr, 0, &wtxn), "txn_begin");
+      begin_write(env, &wtxn);
       writer_thread = std::this_thread::get_id();
       auto mapping = mapping_for(read_gen(wtxn), true);
       end = committed_end = mapping->file_size();
@@ -578,7 +586,7 @@ auto PackCas::open_once(const std::string &dir) -> std::unique_ptr<PackCas> {
                          MDB_NOSYNC | MDB_WRITEMAP | MDB_NOTLS, kFileMode),
             "env_open");
   MDB_txn *txn = nullptr;
-  mdb_check(mdb_txn_begin(impl->env, nullptr, 0, &txn), "txn_begin");
+  begin_write(impl->env, &txn);
   uint64_t gen = 0;
   try {
     mdb_check(mdb_dbi_open(txn, "blobs", MDB_CREATE, &impl->blobs), "dbi_open");
