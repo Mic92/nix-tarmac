@@ -5,6 +5,11 @@
 #include <nix/store/derivations.hh>
 #include <nix/store/path.hh>
 #include <nix/store/store-dir-config.hh>
+#include <nix/util/archive.hh>
+#include <nix/util/canon-path.hh>
+#include <nix/util/file-content-address.hh>
+#include <nix/util/memory-source-accessor.hh>
+#include <nix/util/serialise.hh>
 
 #include <string>
 #include <string_view>
@@ -55,6 +60,37 @@ inline auto unparseDrv(const nix::StoreDirConfig &store,
 #else
   return drv.unparse(store, false);
 #endif
+}
+
+// Restores a Flat or NAR serialisation into the empty accessor. NixOS/nix
+// #15392 made a FileSystemObjectSink create only its own root, with no path
+// argument, and added restorePath(sink, source, method) to do this dispatch.
+// The overload is detected rather than a version compared, because the merge
+// commit itself still reports 2.36.
+// Sink is a template parameter only so that the branch not taken is dependent
+// and never instantiated.
+template <typename Sink = nix::MemorySink>
+void restoreToMemory(nix::MemorySourceAccessor &accessor, nix::Source &source,
+                     nix::FileSerialisationMethod method) {
+  Sink sink{accessor};
+  if constexpr (requires(Sink &s, nix::Source &src,
+                         nix::FileSerialisationMethod m) {
+                  nix::restorePath(s, src, m);
+                }) {
+    nix::restorePath(sink, source, method);
+  } else {
+    switch (method) {
+    case nix::FileSerialisationMethod::NixArchive:
+      nix::parseDump(sink, source);
+      break;
+    case nix::FileSerialisationMethod::Flat:
+      accessor.root = nix::MemorySourceAccessor::File::Regular{};
+      sink.createRegularFile(nix::CanonPath::root, [&](auto &fileSink) {
+        source.drainInto(fileSink);
+      });
+      break;
+    }
+  }
 }
 
 // store paths a .drv refers to (input sources and input derivations)
