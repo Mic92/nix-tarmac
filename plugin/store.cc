@@ -119,17 +119,7 @@ auto ingest(TreeStore &tree, const nix::MemorySourceAccessor::File &file)
 auto parseToMemory(nix::Source &source, nix::FileSerialisationMethod method)
     -> nix::ref<nix::MemorySourceAccessor> {
   auto accessor = nix::make_ref<nix::MemorySourceAccessor>();
-  nix::MemorySink sink{*accessor};
-  switch (method) {
-  case nix::FileSerialisationMethod::NixArchive:
-    parseDump(sink, source);
-    break;
-  case nix::FileSerialisationMethod::Flat:
-    accessor->root = nix::MemorySourceAccessor::File::Regular{};
-    sink.createRegularFile(nix::CanonPath::root,
-                           [&](auto &fileSink) { source.drainInto(fileSink); });
-    break;
-  }
+  nix_compat::restoreToMemory(*accessor, source, method);
   return accessor;
 }
 
