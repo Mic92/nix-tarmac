@@ -112,8 +112,12 @@ for v in $versions; do
   echo "OK immutable $v: $plugin_lock"
 done
 
-# unsupported Nix: the dispatcher must fall back to the builtin fetcher
-nixbin=$(nix build --no-link --print-out-paths "nixpkgs#nixVersions.nix_2_31.out")/bin/nix
+# unsupported Nix (< 2.34): the dispatcher must fall back to the builtin
+# fetcher. nixpkgs dropped nix_2_31, its last such version, so neither the
+# registry's nixpkgs nor this flake's lock, once bumped, provides one; pin
+# a revision that still has it (cached on cache.nixos.org)
+old_nixpkgs=github:NixOS/nixpkgs/f4b6996c4e8b9ee06ce147ec344c885f51071b14
+nixbin=$(nix build --no-link --print-out-paths "$old_nixpkgs#nixVersions.nix_2_31.out")/bin/nix
 plugin=$(nix build --no-link --print-out-paths "$repo#plugin-dispatcher")/lib/nix/plugins
 export XDG_CACHE_HOME="$work/cache-degrade"
 ref_hash=$("$nixbin" eval --extra-experimental-features 'nix-command flakes' \
