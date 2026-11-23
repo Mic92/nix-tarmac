@@ -1,7 +1,7 @@
 {
   "owner": "NixOS",
   "repo": "nix",
-  "rev": "48c45c9e142867c323e1d47a27ef1b7669dc4965",
-  "hash": "sha256-nvJVmJApyDG3JjFMIO0v/HEGHYIcekn74TCBYuqBYKQ=",
-  "version": "2.36.0pre20261115_48c45c9e"
+  "rev": "7dc6d7f2144c509b70c08c011d0adf76d2153927",
+  "hash": "sha256-tjmLYyAQoTyCBbgcUCKBY5i81jtodZAT1H729UI4TJM=",
+  "version": "2.37.0pre20261122_7dc6d7f2"
 }
